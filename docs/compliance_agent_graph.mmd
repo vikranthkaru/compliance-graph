@@ -1,0 +1,32 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	validate_shipment_context(validate_shipment_context)
+	identify_regulation_requirements(identify_regulation_requirements)
+	final_compliance_summary_node(final_compliance_summary_node)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> validate_shipment_context;
+	compliance_parallel_subgraph\3a__end__ --> final_compliance_summary_node;
+	identify_regulation_requirements -.-> compliance_parallel_subgraph\3asalesforce_node;
+	validate_shipment_context -. &nbsp;end&nbsp; .-> __end__;
+	validate_shipment_context -. &nbsp;continue&nbsp; .-> identify_regulation_requirements;
+	final_compliance_summary_node --> __end__;
+	subgraph compliance_parallel_subgraph
+	compliance_parallel_subgraph\3asalesforce_node(salesforce_node)
+	compliance_parallel_subgraph\3apinecone_node(pinecone_node)
+	compliance_parallel_subgraph\3aanalyzer_node(analyzer_node)
+	compliance_parallel_subgraph\3ahuman_intervention_node(human_intervention_node)
+	compliance_parallel_subgraph\3a__end__(<p>__end__</p>)
+	compliance_parallel_subgraph\3aanalyzer_node -.-> compliance_parallel_subgraph\3ahuman_intervention_node;
+	compliance_parallel_subgraph\3ahuman_intervention_node -.-> compliance_parallel_subgraph\3aanalyzer_node;
+	compliance_parallel_subgraph\3apinecone_node --> compliance_parallel_subgraph\3aanalyzer_node;
+	compliance_parallel_subgraph\3asalesforce_node --> compliance_parallel_subgraph\3apinecone_node;
+	compliance_parallel_subgraph\3aanalyzer_node -.-> compliance_parallel_subgraph\3a__end__;
+	end
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

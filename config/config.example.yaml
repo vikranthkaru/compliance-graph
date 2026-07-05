@@ -1,0 +1,6 @@
+salesforce:
+  login_url: https://login.salesforce.com
+  username: your_username@example.com
+
+  connected_app:
+    client_id: your_client_id

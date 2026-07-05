@@ -1,0 +1,9 @@
+.env
+config/config.yaml
+config/salesforce.key
+
+.venv/
+__pycache__/
+*.pyc
+
+docs/*.png
