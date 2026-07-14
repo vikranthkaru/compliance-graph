@@ -2,7 +2,7 @@ from langgraph.types import Command
 
 from app.routes.events import handle_shipment_event, route_event_to_agent
 from agents.compliance_agent.graph import build_compliance_graph
-
+from services.salesforce_service import save_route_check
 
 def resume_graph(graph, config, resume_payload):
     return graph.invoke(
@@ -40,24 +40,80 @@ def main():
     print(result)
 
     if "__interrupt__" in result:
+        for current_interrupt in result["__interrupt__"]:
+            interrupt_payload = current_interrupt.value
+            decision = interrupt_payload["current_decision"]
 
-        resume_payload = {
-            result["__interrupt__"][0].id:
-                "India export license verified.",
-            result["__interrupt__"][1].id:
-                "UAE transit approved.",
-            result["__interrupt__"][2].id:
-                "Germany import permit will be uploaded.",
-        }
+            update_response = save_route_check(
+                {
+                    "identifier": "ROUTE_COMPLIANCE",
+                    "routeCheck": {
+                        "operation": "Update_Current_Iteration",
+                        "shipmentRouteId": interrupt_payload[
+                            "shipment_route_id"
+                        ],
+                        "country": interrupt_payload["country"],
+                        "routeType": interrupt_payload["route_type"],
+                        "iterationNumber": interrupt_payload[
+                            "iteration_number"
+                        ],
+                        "threadId": interrupt_payload["thread_id"],
+                        "interruptId": current_interrupt.id,
+                        "complianceStatus": "Review Required",
+                        "riskLevel": decision["risk_level"],
+                        "confidenceScore": decision[
+                            "confidence_score"
+                        ],
+                        "missingDocuments": stringify_list(
+                            decision.get("missing_documents", [])
+                        ),
+                        "regulationSummary": decision["summary"],
+                        "companyPolicyResult": stringify_list(
+                            decision.get("policy_conflicts", [])
+                        ),
+                        "evidenceReference": stringify_list(
+                            decision.get("evidence_sources", [])
+                        ),
+                        "recommendedAction": decision[
+                            "recommended_action"
+                        ],
+                    },
+                }
+            )
+            if not update_response.get("success"):
+                print(
+                    "Unable to update Salesforce review record: "
+                    f"{update_response.get('message')}"
+                )
+            else:
+                print(
+                    f"Salesforce route check updated: "
+                    f"{update_response.get('recordId')}"
+                )
+        # resume_payload = {}
 
-        result = resume_graph(
-            compliance_graph,
-            config,
-            resume_payload,
-        )
+        # for intr in result["__interrupt__"]:
+        #     country = intr.value["country"]
 
-        print("===== AFTER RESUME =====")
-        print(result)
+        #     if country == "India":
+        #         resume_payload[intr.id] = "India export license verified."
+        #     elif country == "UAE":
+        #         resume_payload[intr.id] = "UAE transit approved."
+        #     elif country == "Germany":
+        #         resume_payload[intr.id] = "Germany import permit will be uploaded."
+
+        # result = resume_graph(
+        #     compliance_graph,
+        #     config,
+        #     resume_payload,
+        # )
+
+        # print("===== AFTER RESUME =====")
+        # print(result)
+
+
+def stringify_list(values: list | None) -> str:
+    return "\n".join(str(value) for value in (values or []))
 
 
 if __name__ == "__main__":

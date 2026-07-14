@@ -30,7 +30,7 @@ class ComplianceState(TypedDict):
 class RouteComplianceWorkerState(TypedDict): 
     shipment_id: str
     shipment_context: Dict[str, Any]
-
+    route_id : str
     # One regulation requirement assigned to this worker
     regulation_requirement: Dict[str, Any]
 
@@ -40,8 +40,9 @@ class RouteComplianceWorkerState(TypedDict):
 
     internal_policy_fetched: bool
     external_policy_fetched: bool
-    human_intervention_required: bool
 
+    human_intervention_required: bool
+ 
     # LLM Decision
     route_decision: Optional[RouteComplianceDecision]
 
@@ -52,4 +53,7 @@ class RouteComplianceWorkerState(TypedDict):
 
      # Worker Errors
     errors: List[str]
+
+
+
 

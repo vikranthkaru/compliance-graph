@@ -2,9 +2,9 @@ from services.salesforce_service import fetch_shipment_context
 def get_static_shipment_event():
     return {
         "eventType": "SHIPMENT_COMPLIANCE_REQUESTED",
-        "eventId": "EVT-000001",
-        "shipmentId": "a01XXXXXXXXXXXX",
-        "shipmentNumber": "SHP-000001",
+        "eventId": "EVT-000000",
+        "shipmentId": "a00g500000jefP8AAI",
+        "shipmentNumber": "SHP-000000",
         "triggeredBy": "005XXXXXXXXXXXX",
         "triggeredAt": "2026-07-01T10:30:00Z",
         "reason": "Shipment submitted for compliance review"

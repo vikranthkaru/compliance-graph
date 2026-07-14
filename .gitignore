@@ -7,3 +7,26 @@ __pycache__/
 *.pyc
 
 docs/*.png
+
+# macOS
+.DS_Store
+
+# Local config files
+config.zip
+config/
+*.key
+*.pem
+*.p12
+*.crt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual env
+.venv/
+
+# Environment files
+.env
+.env.*

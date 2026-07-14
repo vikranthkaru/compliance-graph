@@ -301,18 +301,56 @@ def fetch_external_policy_context_node(state: RouteComplianceWorkerState) -> dic
         "external_policy_fetched": True,
     }
 
+# Subgraph starts
+# → Insert_New_Iteration
+# → iteration 1 created as In Progress
 
+# Analyzer requires human review
+# → Update_human_intervention
+# → iteration 1 updated to Review Required
+
+# Human responds
+# → Salesforce changes iteration 1 to Retriggered
+# → graph resumes
+
+# Analyzer requires another review
+# → Insert_New_Iteration
+# → iteration 1 changed to Failed
+# → iteration 2 created as In Progress
+
+# Human intervention node
+# → Update_human_intervention
+# → iteration 2 changed to Review Required
+from services.salesforce_service import save_route_check
 def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_intervention_node"]]:
     """Processes worker state and appends its data to the orchestrator lists."""
     iteration_count = state.get("iteration_count", 0) + 1
+
 
     req = state["regulation_requirement"]
     shipment_context = state["shipment_context"]
 
     country = req["country"]
     route_type = req["route_type"]
+    route_id = state["route_id"]
 
+   # Insert_New_Iteration --> call salesforce class with iteration count this will be like 1st iteration only insert, 2nd interatoon (1st iteratioon failed, 2nd iteration new), 3rd iteration (2nd iteration failed, 3rd iteration new)
     if iteration_count > 3:
+        # Do not create iteration 4. and update iteration 3 to blocked
+        max_iteration_decision = {
+            "shipmentRouteId": route_id,
+            "country": country,
+            "routeType": route_type,
+            "iterationNumber" : 3,
+            "operation" : "Update_Current_Iteration",
+            "complianceStatus": "Blocked",
+            "riskLevel": "HIGH",
+            "confidenceScore": 0.3,
+            "regulationSummary": f"Maximum human-review iterations reached. Unable to finalize compliance for {country} after three analysis iterations.",
+            "recommended_action": "Escalate the route to a senior compliance officer."
+        }
+        save_route_check({"identifier": "ROUTE_COMPLIANCE", "routeCheck": max_iteration_decision})
+        #update 3rd iteration to compliance status maximum iteration failure
         return Command(
             update={
                 "iteration_count": iteration_count,
@@ -341,6 +379,35 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
             goto=END,
         )
 
+    
+    # Create the current iteration before performing analysis. and old iteratioon to failed 
+    insert_response = save_route_check(
+        {
+            "identifier": "ROUTE_COMPLIANCE",
+            "routeCheck": {
+                "operation": "Insert_New_Iteration",
+                "shipmentRouteId": route_id,
+                "country": country,
+                "routeType": route_type,
+                "iterationNumber": iteration_count,
+                "complianceStatus": "In Progress",
+            },
+        }
+    )
+    if not insert_response.get("success"):
+        return Command(
+            update={
+                "iteration_count": iteration_count,
+                "errors": state.get("errors", [])
+                + [
+                    f"Unable to create route-check iteration "
+                    f"{iteration_count} for {country}: "
+                    f"{insert_response.get('message')}"
+                ],
+            },
+            goto=END,
+        )
+    
     payload = {
         "country": country,
         "route_type": route_type,
@@ -352,6 +419,7 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
         "iteration_count": iteration_count,
     }
 
+    #analysis
     llm = get_structured_chat_model(RouteComplianceDecision)
 
     result = llm.invoke(
@@ -372,25 +440,103 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
             update=worker_update,
             goto="human_intervention_node",
         )
+   
+
+    #If analysis shows no human review required: complete the current iteration.
+    final_status = get_route_check_status(decision)
+    update_response = save_route_check(
+        {
+            "identifier": "ROUTE_COMPLIANCE",
+            "routeCheck": {
+                "operation": "Update_Current_Iteration",
+                "shipmentRouteId": route_id,
+                "country": country,
+                "routeType": route_type,
+                "iterationNumber": iteration_count,
+                "complianceStatus": final_status,
+                "riskLevel": decision["risk_level"],
+                "confidenceScore": decision["confidence_score"],
+                "requiredDocuments": stringify_list(
+                    decision.get("required_documents", [])
+                ),
+                "missingDocuments": stringify_list(
+                    decision.get("missing_documents", [])
+                ),
+                "regulationSummary": decision["summary"],
+                "companyPolicyResult": stringify_list(
+                    decision.get("policy_conflicts", [])
+                ),
+                "evidenceReference": stringify_list(
+                    decision.get("evidence_sources", [])
+                ),
+                "recommendedAction": decision[
+                    "recommended_action"
+                ],
+            },
+        }
+    )
+
+    if not update_response.get("success"):
+        worker_update["errors"] = state.get("errors", []) + [
+            f"Unable to complete route-check iteration "
+            f"{iteration_count} for {country}: "
+            f"{update_response.get('message')}"
+        ]
 
 
     return Command(
         update=worker_update,
         goto=END,
     )
-    
+
+def stringify_list(values: list | None) -> str:
+    return "\n".join(str(value) for value in (values or []))
+
+def get_route_check_status(
+    decision: RouteComplianceDecision,
+) -> str:
+    if decision.human_intervention_required:
+        return "Review Required"
+
+    if decision.compliance_status == RouteComplianceStatus.COMPLIANT:
+        return "Passed"
+
+    if decision.compliance_status in (
+        RouteComplianceStatus.NON_COMPLIANT,
+        RouteComplianceStatus.BLOCKED,
+    ):
+        return "Blocked"
+
+    return "Failed"
+
 
 def human_intervention_node(state: RouteComplianceWorkerState) -> Command[Literal["analyzer_node"]]:
     req = state["regulation_requirement"]
     decision = state.get("route_decision", {})
 
+    # human_feedback = interrupt(
+    #     {
+    #         "message": "Human compliance review required.",
+    #         "country": req["country"],
+    #         "route_type": req["route_type"],
+    #         "current_decision": decision,
+    #         "question": "Please provide clarification, approval, missing document details, or exception approval."
+    #     }
+    # )
     human_feedback = interrupt(
         {
             "message": "Human compliance review required.",
-            "country": req["country"],
-            "route_type": req["route_type"],
+            "shipment_id": state["shipment_id"],
+            "shipment_route_id": state["route_id"],
+            "thread_id": state["shipment_id"],
+            "iteration_number": state["iteration_count"],
+            "country": requirement["country"],
+            "route_type": requirement["route_type"],
             "current_decision": decision,
-            "question": "Please provide clarification, approval, missing document details, or exception approval."
+            "question": (
+                "Please provide clarification, approval, missing "
+                "document details, or exception approval."
+            ),
         }
     )
 

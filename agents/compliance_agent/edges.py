@@ -22,6 +22,15 @@ def route_splitter(state: ComplianceState):
         "regulation_requirements"
     ]
     print(f'breaker node :: {state}')
+    def find_route_id(country: str, route_type: str) -> str | None:
+        for route in routes:
+            if (
+                route.get("country") == country
+                and route.get("routeType") == route_type
+            ):
+                return route.get("routeId")
+        return None
+        
     return [
         Send(
             "compliance_parallel_subgraph",
@@ -31,6 +40,11 @@ def route_splitter(state: ComplianceState):
 
                 # "country": requirement["country"],
                 # "route_type": requirement["route_type"],
+
+                "route_id": find_route_id(
+                    requirement["country"],
+                    requirement["route_type"],
+                ),
 
                 "regulation_requirement": requirement,
 

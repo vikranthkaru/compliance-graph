@@ -30,3 +30,4 @@ langgraph-checkpoint-sqlite
 ipython 
 salesforce-cdp-connector
 pyyaml
+simple_salesforce
