@@ -17,13 +17,20 @@ from agents.compliance_agent.edges import (
 )
 
 from graphs.checkpointer import checkpointer
+from langgraph.types import RetryPolicy
+
+
+retry_policy = RetryPolicy(
+    max_attempts=3,
+    backoff_factor=2.0
+)
 
 def build_compliance_subgraph():
     subgraph = StateGraph(RouteComplianceWorkerState)
     subgraph.add_node("salesforce_node",fetch_company_policy_context_node)
     subgraph.add_node("pinecone_node", fetch_external_policy_context_node)
-    subgraph.add_node("analyzer_node", analyzer_node)
-    subgraph.add_node("human_intervention_node", human_intervention_node)
+    subgraph.add_node("analyzer_node", analyzer_node,retry=retry_policy)
+    subgraph.add_node("human_intervention_node", human_intervention_node,retry=retry_policy)
 
     subgraph.add_edge(START, "salesforce_node")
     subgraph.add_edge("salesforce_node", "pinecone_node")
@@ -37,6 +44,7 @@ def build_compliance_graph():
         graph = StateGraph(ComplianceState)
         graph.add_node("validate_shipment_context", validate_shipment_context)
         graph.add_node("identify_regulation_requirements", identify_regulation_requirements)
+        graph.add_node("index_regulation_content", index_regulation_content)
         graph.add_node("final_compliance_summary_node", final_compliance_summary_node)
 
         compliance_subgraph = build_compliance_subgraph()
@@ -50,8 +58,11 @@ def build_compliance_graph():
                 "end": END,
             },
         )
+        graph.add_edge(
+            "identify_regulation_requirements", "index_regulation_content"
+        )
         graph.add_conditional_edges(
-            "identify_regulation_requirements", route_splitter, ["compliance_parallel_subgraph"]
+            "index_regulation_content", route_splitter, ["compliance_parallel_subgraph"]
         )
         graph.add_edge("compliance_parallel_subgraph", "final_compliance_summary_node")
         graph.add_edge("final_compliance_summary_node", END)

@@ -10,6 +10,13 @@ from llama_index.core.schema import TextNode
 
 from llm.factory import get_chat_model
 from services.vector_service import ingest_data_pinecone
+
+from agents.compliance_agent.schemas import (
+    RouteComplianceDecision,
+    RouteComplianceStatus,
+)
+
+
 def search_regulatory_sources(
     search_query: str,
     authority_types: list[str],
@@ -40,6 +47,7 @@ def search_regulatory_sources(
         urls.append(url)
 
     return urls
+
 
 def extract_url_content_and_ingest(
     urls: list[str],
@@ -81,6 +89,7 @@ def extract_url_content_and_ingest(
             for chunk in clean_chunks:
                 node = TextNode(text=chunk["chunk_text"])
                 node.metadata = {
+                    "shipment_id": shipment_id,
                     "url": url,
                     "country": country,
                     "role": role,
@@ -92,96 +101,161 @@ def extract_url_content_and_ingest(
                 }
                 rag_nodes.append(node)
 
-            ingest_data_pinecone(rag_nodes,shipment_id,namespace)
+            ingest_data_pinecone(rag_nodes, namespace)
 
         except Exception as e:
             print(f"Error processing URL {url}: {str(e)}")
             continue
 
+
 def llm_cleaner_helper(
     raw_text: str,
     country: str,
     role: str,
-    auth_name: str
-) -> List[dict]:
+    regulation_need: str,
+    authority_types: list[str],
+    regulation_topics: list[str],
+    why_this_applies: str,
+) -> list[dict]:
     """
-    Uses LLM to split regulation content into semantic chunks.
-    Falls back to normal recursive chunking if LLM chunking fails.
+    Splits regulatory content into semantic chunks and enriches
+    each chunk with route-specific regulatory context.
+
+    Falls back to recursive character chunking if LLM processing fails.
     """
 
     llm = get_chat_model()
 
-    prompt = ChatPromptTemplate.from_messages([
-        (
-            "system",
-            """
-You are an AI data enrichment node in a pharmaceutical regulatory ingestion pipeline.
+    authority_text = ", ".join(authority_types)
+    topic_text = ", ".join(regulation_topics)
 
-Your input is text extracted from an official or regulatory webpage.
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+You are an AI data-enrichment component in a pharmaceutical regulatory ingestion pipeline.
 
-Tasks:
-1. Split the text into logical, standalone semantic chunks.
-2. For each chunk, generate a short context header.
-3. The context must be specific to:
-   - Country: {country}
-   - Route role: {role}
-   - Regulatory authority: {auth_name}
+Your input is text extracted from a potentially relevant regulatory webpage.
+
+Create logical, standalone semantic chunks from the supplied text.
+
+For each chunk:
+
+- Preserve only content relevant to the regulatory requirement.
+- Add a concise context header.
+- Do not invent regulations or requirements.
+- Do not claim that the source is official unless the supplied content supports that conclusion.
+- Exclude navigation menus, cookie notices, unrelated promotional content, and duplicate text.
+
+Route context:
+
+Country: {country}
+Route role: {role}
+Regulation need: {regulation_need}
+Authority types being searched: {authority_types}
+Regulation topics: {regulation_topics}
+Reason this information applies: {why_this_applies}
 
 Return strictly a valid JSON array.
-Do not include markdown.
-Do not include code fences.
+Do not return Markdown or code fences.
 
-Each object must follow this format:
-{{"chunk_text": "Context for {role} in {country} under {auth_name}: [summary]. Actual chunk content here..."}}
-"""
-        ),
-        (
-            "human",
-            "Analyze and segment this webpage content:\n\n{text}"
-        )
-    ])
+Each object must have exactly this structure:
+
+{{
+    "chunk_text": "Context header. Relevant regulatory content."
+}}
+""",
+            ),
+            (
+                "human",
+                "Analyze and segment this webpage content:\n\n{text}",
+            ),
+        ]
+    )
 
     chain = prompt | llm
 
     try:
-        response = chain.invoke({
-            "text": raw_text,
-            "country": country,
-            "role": role,
-            "auth_name": auth_name
-        })
+        response = chain.invoke(
+            {
+                "text": raw_text,
+                "country": country,
+                "role": role,
+                "regulation_need": regulation_need,
+                "authority_types": authority_text,
+                "regulation_topics": topic_text,
+                "why_this_applies": why_this_applies,
+            }
+        )
 
         clean_content = response.content.strip()
-        clean_content = clean_content.removeprefix("```json").removeprefix("```")
+        clean_content = clean_content.removeprefix("```json")
+        clean_content = clean_content.removeprefix("```")
         clean_content = clean_content.removesuffix("```").strip()
 
         chunks = json.loads(clean_content)
 
-        return chunks
+        if not isinstance(chunks, list):
+            raise ValueError("LLM cleaner response is not a JSON array")
 
-    except Exception as e:
-        print(f"LLM chunking failed: {str(e)}. Falling back to recursive chunking.")
+        valid_chunks = [
+            chunk
+            for chunk in chunks
+            if (
+                isinstance(chunk, dict)
+                and isinstance(chunk.get("chunk_text"), str)
+                and chunk["chunk_text"].strip()
+            )
+        ]
+
+        if not valid_chunks:
+            raise ValueError("LLM cleaner returned no valid chunks")
+
+        return valid_chunks
+
+    except Exception as exc:
+        print(f"LLM chunking failed: {exc}. " "Falling back to recursive chunking.")
 
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=100,
-            separators=["\n\n", "\n", " ", ""]
+            separators=["\n\n", "\n", " ", ""],
         )
 
-        langchain_chunks = text_splitter.split_text(raw_text)
+        raw_chunks = text_splitter.split_text(raw_text)
+
+        context_header = (
+            f"Country: {country}; "
+            f"Route role: {role}; "
+            f"Regulation need: {regulation_need}; "
+            f"Topics: {topic_text}"
+        )
 
         return [
-            {
-                "chunk_text": (
-                    f"Context for {role} in {country} under {auth_name}: {chunk}"
-                )
-            }
-            for chunk in langchain_chunks
+            {"chunk_text": f"{context_header}\n\n{chunk}"}
+            for chunk in raw_chunks
+            if chunk.strip()
         ]
 
 
-# def resume_graph(graph, config, resume_payload):
-#     return graph.invoke(
-#         Command(resume=resume_payload),
-#         config=config
-#     )
+def stringify_list(values: list | None) -> str:
+    return "\n".join(str(value) for value in (values or []))
+
+
+def get_route_check_status(
+    decision: RouteComplianceDecision,
+) -> str:
+    if decision.human_intervention_required:
+        return "Review Required"
+
+    if decision.compliance_status == RouteComplianceStatus.COMPLIANT:
+        return "Passed"
+
+    if decision.compliance_status in (
+        RouteComplianceStatus.NON_COMPLIANT,
+        RouteComplianceStatus.BLOCKED,
+    ):
+        return "Blocked"
+
+    return "Failed"

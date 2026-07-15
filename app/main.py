@@ -10,7 +10,7 @@ def resume_graph(graph, config, resume_payload):
         config=config,
     )
 
-
+from agents.compliance_agent.helpers import stringify_list
 def main():
     result = handle_shipment_event()
     route_result = route_event_to_agent(result)
@@ -111,9 +111,6 @@ def main():
         # print("===== AFTER RESUME =====")
         # print(result)
 
-
-def stringify_list(values: list | None) -> str:
-    return "\n".join(str(value) for value in (values or []))
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ import time
 def ensure_pinecone_index(index_name: str = INDEX_NAME):
     pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-    existing_indexes = [index.name for index in pc.list_indexes()]
+    existing_indexes = pc.list_indexes().names()
 
     if index_name not in existing_indexes:
         try:
@@ -52,28 +52,35 @@ def ensure_pinecone_index(index_name: str = INDEX_NAME):
 
     return pc.Index(index_name)
 
+def get_registry_key(
+    index_name: str,
+    namespace: str | None) -> str:
+    return f"{index_name}:{namespace or 'default'}"
 
-def get_rag_index(index_name: str = INDEX_NAME):
-    if index_name not in _INDEX_REGISTRY:
+def get_rag_index(index_name: str = INDEX_NAME, namespace: str | None = None,):
+    registry_key = get_registry_key(index_name, namespace)
+    if registry_key not in _INDEX_REGISTRY:
         Settings.embed_model = get_embedding_model()
 
         pinecone_index = ensure_pinecone_index(index_name)
-        vector_store = PineconeVectorStore(pinecone_index=pinecone_index)
+        vector_store = PineconeVectorStore(pinecone_index=pinecone_index, namespace=namespace,)
 
-        _INDEX_REGISTRY[index_name] = VectorStoreIndex.from_vector_store(
+        _INDEX_REGISTRY[registry_key] = VectorStoreIndex.from_vector_store(
             vector_store=vector_store
         )
 
-    return _INDEX_REGISTRY[index_name]
+    return _INDEX_REGISTRY[registry_key]
 
 
-def ingest_data_pinecone(rag_nodes: list, index_name: str = INDEX_NAME, namespace: str | None = None):
+def ingest_data_pinecone(rag_nodes: list, namespace: str | None = None):
     """
     Accepts pre-chunked LlamaIndex TextNodes, provisions Pinecone if missing,
     generates embeddings, and upserts them securely into the cloud vector store.
     """
+    if not rag_nodes:
+        return None
     Settings.embed_model = get_embedding_model()
-    pinecone_index = ensure_pinecone_index(index_name)
+    pinecone_index = ensure_pinecone_index(INDEX_NAME)
 
     vector_store = PineconeVectorStore(
         pinecone_index=pinecone_index,  namespace=namespace
@@ -88,7 +95,8 @@ def ingest_data_pinecone(rag_nodes: list, index_name: str = INDEX_NAME, namespac
         storage_context=storage_context
     )
 
-    _INDEX_REGISTRY[index_name] = index
+    registry_key = get_registry_key(INDEX_NAME, namespace)
+    _INDEX_REGISTRY[registry_key] = index
 
     return index
 
@@ -121,7 +129,7 @@ async def  afetch_data_from_pinecone(query_text: str, similarity_top_k: int = 3,
         query_engine = index.as_query_engine(similarity_top_k=similarity_top_k)
         response = query_engine.query(query_text)
         return response
-    
+
 def fetch_data_from_pinecone(
     query_text: str,
     similarity_top_k: int = 3,

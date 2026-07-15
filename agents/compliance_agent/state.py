@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import TypedDict, Dict, Any, List, Optional
-from agents.compliance_agent.schemas import RouteComplianceDecision
+# from agents.compliance_agent.schemas import RouteComplianceDecision
 
 # ===========================
 # Main Graph State
@@ -44,7 +44,8 @@ class RouteComplianceWorkerState(TypedDict):
     human_intervention_required: bool
  
     # LLM Decision
-    route_decision: Optional[RouteComplianceDecision]
+    # route_decision: Optional[RouteComplianceDecision]
+    route_decision: Optional[Dict[str, Any]]
 
 
     # Human-in-the-loop

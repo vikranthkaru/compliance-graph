@@ -7,11 +7,13 @@ graph TD;
 	__start__([<p>__start__</p>]):::first
 	validate_shipment_context(validate_shipment_context)
 	identify_regulation_requirements(identify_regulation_requirements)
+	index_regulation_content(index_regulation_content)
 	final_compliance_summary_node(final_compliance_summary_node)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> validate_shipment_context;
 	compliance_parallel_subgraph\3a__end__ --> final_compliance_summary_node;
-	identify_regulation_requirements -.-> compliance_parallel_subgraph\3asalesforce_node;
+	identify_regulation_requirements --> index_regulation_content;
+	index_regulation_content -.-> compliance_parallel_subgraph\3asalesforce_node;
 	validate_shipment_context -. &nbsp;end&nbsp; .-> __end__;
 	validate_shipment_context -. &nbsp;continue&nbsp; .-> identify_regulation_requirements;
 	final_compliance_summary_node --> __end__;

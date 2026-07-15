@@ -1,3 +1,5 @@
+from xml.parsers.expat import errors
+
 from agents.compliance_agent.state import ComplianceState,RouteComplianceWorkerState
 from langgraph.types import Command,interrupt
 from langgraph.constants import END
@@ -12,7 +14,7 @@ from agents.compliance_agent.schemas import (
 
 from agents.compliance_agent.prompts import (
     IDENTIFY_REGULATION_REQUIREMENTS_PROMPT,
-    SALESFORCE_POLICY_RETRIEVAL_PROMPT,
+    # SALESFORCE_POLICY_RETRIEVAL_PROMPT,
     PINECONE_REGULATION_RETRIEVAL_PROMPT,
     ROUTE_ANALYZER_PROMPT,
     FINAL_COMPLIANCE_SUMMARY_PROMPT
@@ -26,28 +28,28 @@ from agents.compliance_agent.helpers import (
 from services.vector_service import fetch_data_from_pinecone
 
 #node-1
-def validate_shipment_context(state: ComplianceState) -> ComplianceState:
-    next_destination = state.get("next_action")
-    shipment_context = state.get("shipment_context", {}) 
-    errors = []
+def validate_shipment_context(state: ComplianceState) -> dict:
+    shipment_context = state.get("shipment_context") or {}
+    errors: list[str] = []
 
     shipment = shipment_context.get("shipment")
     product = shipment_context.get("product")
-    route = shipment_context.get("route")
+    routes = shipment_context.get("route")
     documents = shipment_context.get("documents")
 
-    if not shipment:
+    if not isinstance(shipment, dict) or not shipment:
         errors.append("Shipment details are missing")
-    if not product:
+
+    if not isinstance(product, dict) or not product:
         errors.append("Product details are missing")
 
-    if route is None or not isinstance(route, list) or len(route) == 0:
+    if not isinstance(routes, list) or not routes:
         errors.append("Shipment route is missing")
 
-    if documents is None or not isinstance(documents, list):
+    if not isinstance(documents, list):
         errors.append("Shipment documents are missing")
 
-    if shipment:
+    if isinstance(shipment, dict) and shipment:
         if not shipment.get("shipmentId"):
             errors.append("Shipment ID is missing")
 
@@ -57,14 +59,32 @@ def validate_shipment_context(state: ComplianceState) -> ComplianceState:
         if shipment.get("complianceStatus") != "Pending":
             errors.append("Compliance status is not Pending")
 
-    if route and isinstance(route, list):
-        route_types = {stop.get("routeType") for stop in route}
+    if isinstance(routes, list) and routes:
+        route_types = {
+            route.get("routeType")
+            for route in routes
+            if isinstance(route, dict)
+        }
 
         if "Origin" not in route_types:
             errors.append("Origin country route is missing")
 
         if "Destination" not in route_types:
             errors.append("Destination country route is missing")
+
+        for index, route in enumerate(routes, start=1):
+            if not isinstance(route, dict):
+                errors.append(f"Route {index} has an invalid structure")
+                continue
+
+            if not route.get("routeId"):
+                errors.append(f"Route {index} ID is missing")
+
+            if not route.get("country"):
+                errors.append(f"Route {index} country is missing")
+
+            if not route.get("routeType"):
+                errors.append(f"Route {index} type is missing")
 
     return {
         "errors": errors
@@ -79,13 +99,15 @@ def identify_regulation_requirements(state:ComplianceState) -> ComplianceState:
             shipment_context=state["shipment_context"]
         )
     )
-    print(f"Regulation Search Plan: {response.model_dump()}")
+    search_plan = response.model_dump(mode="json")
+    print(f"Regulation Search Plan: {search_plan}")
+
     return {
-         "regulation_search_plan": response.model_dump()
+        "regulation_search_plan": search_plan
     }
 
 #node-2
-def index_regulation_content(state:ComplianceState):
+def index_regulation_content(state:ComplianceState)-> dict:
     """
     Node 3:
     Reads regulation_search_plan from state, searches/crawls official regulation content,
@@ -94,14 +116,7 @@ def index_regulation_content(state:ComplianceState):
     This node performs a side-effect only.
     It does not update LangGraph state.
     """
-
-    country: str = Field(description="Country for which regulations must be checked")
-    route_type: str = Field(description="Origin, Transit or Destination")
-    regulation_need: str = Field(description="Type of regulation that needs to be verified")
-    authority_types: List[str] = Field(description="Types of official government or regulatory authorities responsible for the applicable regulations, such as Drug Regulatory Authority, Customs Authority, Ministry of Health, Civil Aviation Authority, or Dangerous Goods Authority")
-    regulation_topics: List[str] = Field(description="Specific regulatory topics that must be searched, such as Export, Import, Transit, Prescription Medicine, Cold Chain, Controlled Substance, Hazardous Material, GDP, GMP, or Dangerous Goods")
-    search_query: str = Field(description="Optimized search query that will be used by the retrieval agent to discover official government regulatory sources")
-    why_this_applies: str = Field(description="Reason these regulatory requirements apply based on the shipment, product, transport mode, and route")
+    
     shipment_id = state["shipment_context"]["shipment"]["shipmentId"]
     namespace = f"shipment-{shipment_id}"
 
@@ -115,7 +130,7 @@ def index_regulation_content(state:ComplianceState):
         authority_types = req.get("authority_types")
         regulation_topics = req.get("regulation_topics")
         search_query = req.get("search_query")
-        why_this_applies = req.get("why_this_applies", [])
+        why_this_applies = req.get("why_this_applies", "")
 
         urls = search_regulatory_sources(
             search_query=search_query,
@@ -197,110 +212,94 @@ def final_compliance_summary_node(state):
     }
 
 #---------------------------Sub Graphs----------#
-from tools.rag_tools import ( get_salesforce_rag_tools, get_pinecone_rag_tools )
+#removing agent from salesforce node as Your Data Cloud vector index already performs semantic retrieval, so the node only needs to construct a focused search string and call the tool function directly.
+from tools.rag_tools import ( fetch_company_policy_from_data_cloud, get_pinecone_rag_tools, search_government_regulations )
 
-def fetch_company_policy_context_node(state:RouteComplianceWorkerState) -> dict:
+def fetch_company_policy_context_node(
+    state: RouteComplianceWorkerState,
+) -> dict:
     shipment_context = state["shipment_context"]
     requirement = state["regulation_requirement"]
-
-    payload = {
-        "country": requirement["country"],
-        "route_role": requirement["route_type"],
-        "regulation_need": requirement["regulation_need"],
-        "regulation_topics": requirement["regulation_topics"],
-        "product_name": shipment_context["product"]["productName"],
-        "product_category": shipment_context["product"]["drugCategory"],
-        "is_cold_chain": shipment_context["product"]["requiresColdChain"],
-        "transport_mode": shipment_context["shipment"]["transportMode"],
-    }
-
-    tools = get_salesforce_rag_tools()
-    agent = get_react_agent(
-            tools=tools,
-            system_prompt=SALESFORCE_POLICY_RETRIEVAL_PROMPT,
-    )
-    response = agent.invoke(
-        {
-            "messages": [
-                (
-                    "user",
-                    f"Retrieve internal company policies for this shipment route. Payload: {payload}"
-                )
-            ]
-        }
-    )
-
-    
-    return {
-        "company_policy_context": [
-            {
-                "source_type": "company_policy",
-                "raw_content": str(response),
-                "metadata": {
-                    "country": requirement["country"],
-                    "route_role": requirement["route_type"],
-                    "regulation_topics": requirement["regulation_topics"],
-                },
-            }
-        ],
-        "internal_policy_fetched": True,
-    }
-
-def fetch_external_policy_context_node(state: RouteComplianceWorkerState) -> dict:
-    shipment_context = state["shipment_context"]
-    req = state["regulation_requirement"]
 
     product = shipment_context["product"]
     shipment = shipment_context["shipment"]
 
-    payload = {
-        "country": req["country"],
-        "route_role": req["route_type"],
-        "regulation_need": req["regulation_need"],
-        "regulation_topics": req["regulation_topics"],
-        "product_name": product["productName"],
-        "product_category": product["drugCategory"],
-        "storage_type": product["storageType"],
-        "is_cold_chain": product["requiresColdChain"],
-        "transport_mode": shipment["transportMode"],
-    }
+    search_text = " ".join(
+        [
+            requirement["country"],
+            requirement["route_type"],
+            requirement["regulation_need"],
+            product["productName"],
+            product["drugCategory"],
+            "cold chain" if product["requiresColdChain"] else "",
+            shipment["transportMode"],
+            *requirement.get("regulation_topics", []),
+        ]
+    ).strip()
 
-    tools = get_pinecone_rag_tools()
-
-    agent = get_react_agent(
-        tools=tools,
-        system_prompt=PINECONE_REGULATION_RETRIEVAL_PROMPT
-    )
-
-    response = agent.invoke(
-        {
-            "messages": [
-                (
-                    "user",
-                    f"Retrieve external regulations for this shipment route. Payload: {payload}"
-                )
-            ]
+    try:
+        company_policy_context = (
+            fetch_company_policy_from_data_cloud(
+                    search_text=search_text,
+                    limit=10,
+            )
+        )
+        print(f"Salesforce company-policy retrieval successful for {requirement['country']}: {company_policy_context} results found.")
+        return {
+            "company_policy_context": company_policy_context,
+            "internal_policy_fetched": True,
         }
-    )
 
-    
-    return {
-        "government_regulation_context": [
-            {
-                "source_type": "government_regulation",
-                "raw_content": str(response),
-                "metadata": {
-                    "country": req["country"],
-                    "route_role": req["route_type"],
-                    "regulation_topics": req["regulation_topics"],
-                    "regulation_need": req["regulation_need"],
-                    "search_query": req["search_query"]
-                },
-            }
-        ],
-        "external_policy_fetched": True,
-    }
+    except Exception as exc:
+        return {
+            "company_policy_context": [],
+            "internal_policy_fetched": False,
+            "errors": state.get("errors", [])
+            + [
+                "Salesforce company-policy retrieval failed for "
+                f"{requirement['country']}: {exc}"
+            ],
+        }
 
+
+def fetch_external_policy_context_node(
+    state: RouteComplianceWorkerState,
+) -> dict:
+    shipment_context = state["shipment_context"]
+    req = state["regulation_requirement"]
+
+    shipment_id = state["shipment_id"]
+    country = req["country"]
+    route_type = req["route_type"]
+
+    query = req["search_query"]
+
+    try:
+        government_regulation_context = search_government_regulations(
+            query=query,
+            country=country,
+            route_type=route_type,
+            shipment_id=shipment_id,
+            similarity_top_k=5,
+        )
+
+        return {
+            "government_regulation_context": government_regulation_context,
+            "external_policy_fetched": bool(
+                government_regulation_context
+            ),
+        }
+
+    except Exception as exc:
+        return {
+            "government_regulation_context": [],
+            "external_policy_fetched": False,
+            "errors": state.get("errors", [])
+            + [
+                "Government regulation retrieval failed for "
+                f"{country} {route_type}: {exc}"
+            ],
+        }
 # Subgraph starts
 # → Insert_New_Iteration
 # → iteration 1 created as In Progress
@@ -322,6 +321,8 @@ def fetch_external_policy_context_node(state: RouteComplianceWorkerState) -> dic
 # → Update_human_intervention
 # → iteration 2 changed to Review Required
 from services.salesforce_service import save_route_check
+from agents.compliance_agent.helpers import get_route_check_status,stringify_list
+
 def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_intervention_node"]]:
     """Processes worker state and appends its data to the orchestrator lists."""
     iteration_count = state.get("iteration_count", 0) + 1
@@ -428,7 +429,7 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
         )
     )
 
-    decision = result.model_dump()
+    decision = result.model_dump(mode="json")
 
     worker_update = {
         "iteration_count": iteration_count,
@@ -489,40 +490,11 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
         goto=END,
     )
 
-def stringify_list(values: list | None) -> str:
-    return "\n".join(str(value) for value in (values or []))
-
-def get_route_check_status(
-    decision: RouteComplianceDecision,
-) -> str:
-    if decision.human_intervention_required:
-        return "Review Required"
-
-    if decision.compliance_status == RouteComplianceStatus.COMPLIANT:
-        return "Passed"
-
-    if decision.compliance_status in (
-        RouteComplianceStatus.NON_COMPLIANT,
-        RouteComplianceStatus.BLOCKED,
-    ):
-        return "Blocked"
-
-    return "Failed"
 
 
 def human_intervention_node(state: RouteComplianceWorkerState) -> Command[Literal["analyzer_node"]]:
     req = state["regulation_requirement"]
     decision = state.get("route_decision", {})
-
-    # human_feedback = interrupt(
-    #     {
-    #         "message": "Human compliance review required.",
-    #         "country": req["country"],
-    #         "route_type": req["route_type"],
-    #         "current_decision": decision,
-    #         "question": "Please provide clarification, approval, missing document details, or exception approval."
-    #     }
-    # )
     human_feedback = interrupt(
         {
             "message": "Human compliance review required.",
@@ -530,8 +502,8 @@ def human_intervention_node(state: RouteComplianceWorkerState) -> Command[Litera
             "shipment_route_id": state["route_id"],
             "thread_id": state["shipment_id"],
             "iteration_number": state["iteration_count"],
-            "country": requirement["country"],
-            "route_type": requirement["route_type"],
+            "country": req["country"],
+            "route_type": req["route_type"],
             "current_decision": decision,
             "question": (
                 "Please provide clarification, approval, missing "
@@ -590,3 +562,5 @@ def subgraph_reducer_node(state: RouteComplianceWorkerState):
             route_key: final_data
         }
     }
+
+

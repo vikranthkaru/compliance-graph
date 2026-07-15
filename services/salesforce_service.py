@@ -1,5 +1,6 @@
 from pathlib import Path
 import yaml
+from typing import Any
 from simple_salesforce import Salesforce
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 def get_salesforce_cloud_connection() -> Salesforce:
@@ -69,32 +70,32 @@ def save_route_check(payload: dict[str, Any]) -> dict[str, Any]:
             "message": str(sf),
         }
 
-        try:
-            response = sf.apexecute(
+    try:
+        response = sf.apexecute(
             "shipment/",
             method="POST",
             data=payload,
-            )
+        )
 
-            if not isinstance(response, dict):
-                return {
-                    "success": False,
-                    "action": "Failed",
-                    "recordId": None,
-                    "message": f"Unexpected Salesforce response: {response}",
-                }
-
-            return response
-
-        except Exception as exc:
-            print(f"Error saving route compliance check: {exc}")
-
+        if not isinstance(response, dict):
             return {
                 "success": False,
                 "action": "Failed",
                 "recordId": None,
-                "message": str(exc),
+                "message": f"Unexpected Salesforce response: {response}",
             }
+
+        return response
+
+    except Exception as exc:
+        print(f"Error saving route compliance check: {exc}")
+
+        return {
+            "success": False,
+            "action": "Failed",
+            "recordId": None,
+            "message": str(exc),
+        }
 
 # def fetch_shipment_context(shipment_id: str) -> dict:
 #     """
