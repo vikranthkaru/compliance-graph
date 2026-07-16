@@ -1,8 +1,9 @@
 from langgraph.types import Command
-
 from app.routes.events import handle_shipment_event, route_event_to_agent
 from agents.compliance_agent.graph import build_compliance_graph
 from services.salesforce_service import save_route_check
+
+from uuid import uuid4
 
 def resume_graph(graph, config, resume_payload):
     return graph.invoke(
@@ -10,7 +11,7 @@ def resume_graph(graph, config, resume_payload):
         config=config,
     )
 
-from agents.compliance_agent.helpers import stringify_list
+from agents.compliance_agent.helpers import helper_stringify_list
 def main():
     result = handle_shipment_event()
     route_result = route_event_to_agent(result)
@@ -22,10 +23,10 @@ def main():
     initial_state = route_result["initialState"]
 
     shipment = initial_state["shipment_context"]["shipment"]
-
+    thread_id = str(uuid4())
     config = {
         "configurable": {
-            "thread_id": shipment["shipmentId"]
+            "thread_id": thread_id
         }
     }
 
@@ -64,14 +65,14 @@ def main():
                         "confidenceScore": decision[
                             "confidence_score"
                         ],
-                        "missingDocuments": stringify_list(
+                        "missingDocuments": helper_stringify_list(
                             decision.get("missing_documents", [])
                         ),
                         "regulationSummary": decision["summary"],
-                        "companyPolicyResult": stringify_list(
+                        "companyPolicyResult": helper_stringify_list(
                             decision.get("policy_conflicts", [])
                         ),
-                        "evidenceReference": stringify_list(
+                        "evidenceReference": helper_stringify_list(
                             decision.get("evidence_sources", [])
                         ),
                         "recommendedAction": decision[

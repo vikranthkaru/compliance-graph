@@ -78,7 +78,7 @@ def route_splitter(state: ComplianceState):
                     "internal_policy_fetched": False,
                     "external_policy_fetched": False,
                     "route_decision": None,
-                    "human_feedback": None,
+                    "human_feedback": [],
                     "iteration_count": 0,
                     "errors": [],
                 },

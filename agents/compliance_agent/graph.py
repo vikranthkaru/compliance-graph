@@ -29,7 +29,7 @@ def build_compliance_subgraph():
     subgraph = StateGraph(RouteComplianceWorkerState)
     subgraph.add_node("salesforce_node",fetch_company_policy_context_node)
     subgraph.add_node("pinecone_node", fetch_external_policy_context_node)
-    subgraph.add_node("analyzer_node", analyzer_node,retry=retry_policy)
+    subgraph.add_node("analyzer_node", analyzer_node)
     subgraph.add_node("human_intervention_node", human_intervention_node,retry=retry_policy)
 
     subgraph.add_edge(START, "salesforce_node")

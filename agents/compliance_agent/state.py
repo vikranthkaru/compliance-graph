@@ -49,12 +49,8 @@ class RouteComplianceWorkerState(TypedDict):
 
 
     # Human-in-the-loop
-    human_feedback: Optional[str]
+    human_feedback: list[dict]
     iteration_count: int
 
      # Worker Errors
     errors: List[str]
-
-
-
-

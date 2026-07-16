@@ -2,7 +2,7 @@ from langchain_openai import ChatOpenAI
 from langchain_qwq import ChatQwen
 from llm.config import settings
 def get_chat_model():
-    print(f"settings.chat_provider==>{settings.chat_provider}")
+    #Sprint(f"settings.chat_provider==>{settings.chat_provider}")
     if settings.chat_provider ==  "qwen":
         return ChatQwen(
             model=settings.chat_model,

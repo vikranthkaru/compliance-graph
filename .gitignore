@@ -1,6 +1,7 @@
 .env
 config/config.yaml
 config/salesforce.key
+config/testenv
 
 .venv/
 __pycache__/
@@ -13,7 +14,6 @@ docs/*.png
 
 # Local config files
 config.zip
-config/
 *.key
 *.pem
 *.p12

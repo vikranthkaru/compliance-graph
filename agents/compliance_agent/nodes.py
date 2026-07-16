@@ -14,18 +14,23 @@ from agents.compliance_agent.schemas import (
 
 from agents.compliance_agent.prompts import (
     IDENTIFY_REGULATION_REQUIREMENTS_PROMPT,
-    # SALESFORCE_POLICY_RETRIEVAL_PROMPT,
-    PINECONE_REGULATION_RETRIEVAL_PROMPT,
     ROUTE_ANALYZER_PROMPT,
     FINAL_COMPLIANCE_SUMMARY_PROMPT
 )
 
 from agents.compliance_agent.helpers import (
-    search_regulatory_sources,
-    extract_url_content_and_ingest,
+    helper_build_regulation_search_query,
+    helper_search_regulatory_sources,
+    helper_rerank_regulatory_sources,
+    helper_extract_url_content_and_ingest,
+    helper_get_route_check_status,
+    helper_stringify_list
 )
+from services.salesforce_service import save_route_check
 
 from services.vector_service import fetch_data_from_pinecone
+from tools.rag_tools import ( fetch_company_policy_from_data_cloud, search_government_regulations )
+
 
 #node-1
 def validate_shipment_context(state: ComplianceState) -> dict:
@@ -90,7 +95,7 @@ def validate_shipment_context(state: ComplianceState) -> dict:
         "errors": errors
     }
 
-#decider or router node
+#node-2
 def identify_regulation_requirements(state:ComplianceState) -> ComplianceState:
     llm = get_structured_chat_model(RegulationSearchPlan)
 
@@ -106,7 +111,7 @@ def identify_regulation_requirements(state:ComplianceState) -> ComplianceState:
         "regulation_search_plan": search_plan
     }
 
-#node-2
+#node-3
 def index_regulation_content(state:ComplianceState)-> dict:
     """
     Node 3:
@@ -116,38 +121,68 @@ def index_regulation_content(state:ComplianceState)-> dict:
     This node performs a side-effect only.
     It does not update LangGraph state.
     """
-    
+    shipment_context = state["shipment_context"]
     shipment_id = state["shipment_context"]["shipment"]["shipmentId"]
     namespace = f"shipment-{shipment_id}"
-
-
     search_plan = state["regulation_search_plan"]
     requirements = search_plan.get("regulation_requirements", [])
     for req in requirements:
         country = req.get("country")
         route_type = req.get("route_type")
-        regulation_need = req.get("regulation_need")
-        authority_types = req.get("authority_types")
-        regulation_topics = req.get("regulation_topics")
-        search_query = req.get("search_query")
-        why_this_applies = req.get("why_this_applies", "")
+        regulation_topics = req.get("regulation_topics", [])
+        why_this_applies = req.get("why_this_applies", [])
 
-        urls = search_regulatory_sources(
+
+        search_query = helper_build_regulation_search_query(
+            country=country,
+            route_type=route_type,
+            regulation_topics=regulation_topics,
+            shipment_context=shipment_context,
+        )
+        print(
+            f"Regulation search query for {country}: "
+            f"{search_query}"
+        )
+        ranked_results = helper_search_regulatory_sources(
             search_query=search_query,
-            authority_types=authority_types,
+            search_country=country,
+            route_type=route_type,
             regulation_topics=regulation_topics,
         )
+        reranked_results = helper_rerank_regulatory_sources(
+            ranked_results=ranked_results,
+            country=country,
+            route_type=route_type,
+            regulation_topics=regulation_topics,
+            why_this_applies=why_this_applies,
+            top_k=3,
+            minimum_score=0.60,
+        )
+        print(f"\n===== RERANKED SOURCES: {country} / {route_type} =====")
+        for source in reranked_results:
+            print(
+                {
+                    "title": source.get("title"),
+                    "url": source.get("url"),
+                    "rank_score": source.get("rank_score"),
+                    "rerank_score": source.get("rerank_score"),
+                    "reason": source.get("rerank_reason"),
+                }
+            )
+        
+        urls = [
+            source["url"]
+            for source in reranked_results
+        ]
 
-        extract_url_content_and_ingest(
-            urls=urls,
+        helper_extract_url_content_and_ingest(
+            sources=reranked_results,
             country=country,
             role=route_type,
-            regulation_need=regulation_need,
-            authority_types=authority_types,
             regulation_topics=regulation_topics,
             why_this_applies=why_this_applies,
             shipment_id=shipment_id,
-            namespace=namespace
+            namespace=namespace,
         )
 
     return {}
@@ -213,8 +248,6 @@ def final_compliance_summary_node(state):
 
 #---------------------------Sub Graphs----------#
 #removing agent from salesforce node as Your Data Cloud vector index already performs semantic retrieval, so the node only needs to construct a focused search string and call the tool function directly.
-from tools.rag_tools import ( fetch_company_policy_from_data_cloud, get_pinecone_rag_tools, search_government_regulations )
-
 def fetch_company_policy_context_node(
     state: RouteComplianceWorkerState,
 ) -> dict:
@@ -225,16 +258,19 @@ def fetch_company_policy_context_node(
     shipment = shipment_context["shipment"]
 
     search_text = " ".join(
-        [
+        part
+        for part in [
             requirement["country"],
             requirement["route_type"],
-            requirement["regulation_need"],
             product["productName"],
             product["drugCategory"],
-            "cold chain" if product["requiresColdChain"] else "",
+            "cold chain"
+            if product.get("requiresColdChain")
+            else "",
             shipment["transportMode"],
             *requirement.get("regulation_topics", []),
         ]
+        if part
     ).strip()
 
     try:
@@ -244,10 +280,17 @@ def fetch_company_policy_context_node(
                     limit=10,
             )
         )
-        print(f"Salesforce company-policy retrieval successful for {requirement['country']}: {company_policy_context} results found.")
+        result_count = len(company_policy_context)
+        print(
+            "Salesforce company-policy retrieval completed for "
+            f"{requirement['country']} / "
+            f"{requirement['route_type']}: "
+            f"{result_count} results found."
+        )
+
         return {
             "company_policy_context": company_policy_context,
-            "internal_policy_fetched": True,
+            "internal_policy_fetched": bool(company_policy_context)
         }
 
     except Exception as exc:
@@ -257,7 +300,8 @@ def fetch_company_policy_context_node(
             "errors": state.get("errors", [])
             + [
                 "Salesforce company-policy retrieval failed for "
-                f"{requirement['country']}: {exc}"
+                f"{requirement['country']} / "
+                f"{requirement['route_type']}: {exc}"
             ],
         }
 
@@ -266,13 +310,20 @@ def fetch_external_policy_context_node(
     state: RouteComplianceWorkerState,
 ) -> dict:
     shipment_context = state["shipment_context"]
-    req = state["regulation_requirement"]
+    requirement = state["regulation_requirement"]
 
     shipment_id = state["shipment_id"]
-    country = req["country"]
-    route_type = req["route_type"]
+    country = requirement["country"]
+    route_type = requirement["route_type"]
+    regulation_topics = requirement.get("regulation_topics", [])
 
-    query = req["search_query"]
+    query = helper_build_regulation_search_query(
+        country=country,
+        route_type=route_type,
+        regulation_topics=regulation_topics,
+        shipment_context=shipment_context,
+    )
+
 
     try:
         government_regulation_context = search_government_regulations(
@@ -281,6 +332,12 @@ def fetch_external_policy_context_node(
             route_type=route_type,
             shipment_id=shipment_id,
             similarity_top_k=5,
+        )
+        
+        print(
+            "Government-regulation retrieval completed for "
+            f"{country} / {route_type}: "
+            f"{len(government_regulation_context)} results found."
         )
 
         return {
@@ -291,13 +348,18 @@ def fetch_external_policy_context_node(
         }
 
     except Exception as exc:
+        print(
+            "Government-regulation retrieval failed for "
+            f"{country} / {route_type}: {exc}"
+        )
+
         return {
             "government_regulation_context": [],
             "external_policy_fetched": False,
             "errors": state.get("errors", [])
             + [
-                "Government regulation retrieval failed for "
-                f"{country} {route_type}: {exc}"
+                "Government-regulation retrieval failed for "
+                f"{country} / {route_type}: {exc}"
             ],
         }
 # Subgraph starts
@@ -320,8 +382,7 @@ def fetch_external_policy_context_node(
 # Human intervention node
 # → Update_human_intervention
 # → iteration 2 changed to Review Required
-from services.salesforce_service import save_route_check
-from agents.compliance_agent.helpers import get_route_check_status,stringify_list
+
 
 def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_intervention_node"]]:
     """Processes worker state and appends its data to the orchestrator lists."""
@@ -348,9 +409,23 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
             "riskLevel": "HIGH",
             "confidenceScore": 0.3,
             "regulationSummary": f"Maximum human-review iterations reached. Unable to finalize compliance for {country} after three analysis iterations.",
-            "recommended_action": "Escalate the route to a senior compliance officer."
+            "recommendedAction": "Escalate the route to a senior compliance officer."
         }
-        save_route_check({"identifier": "ROUTE_COMPLIANCE", "routeCheck": max_iteration_decision})
+        max_update_response = save_route_check(
+            {
+                "identifier": "ROUTE_COMPLIANCE",
+                "routeCheck": max_iteration_decision,
+            }
+        )
+        errors = state.get("errors", []) + [
+            f"FAILED_MAX_ITERATIONS for {country}"
+        ]
+        if not max_update_response.get("success"):
+            errors.append(
+                "Unable to block the final route-check iteration: "
+                f"{max_update_response.get('message')}"
+            )
+
         #update 3rd iteration to compliance status maximum iteration failure
         return Command(
             update={
@@ -358,10 +433,10 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
                 "route_decision": {
                     "country": country,
                     "route_type": route_type,
-                    "compliance_status": "REVIEW_REQUIRED",
+                    "compliance_status": "Blocked",
                     "confidence_level": "LOW",
                     "confidence_score": 0.3,
-                    "human_intervention_required": True,
+                    "human_intervention_required": False,
                     "risk_level": "HIGH",
                     "summary": "Maximum human review iterations reached.",
                     "reason": f"Unable to finalize compliance decision for {country} after 3 review attempts.",
@@ -373,9 +448,7 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
                     "recommended_action": "Escalate to compliance officer for final decision.",
                     "evidence_sources": [],
                 },
-                "errors": state.get("errors", []) + [
-                    f"FAILED_MAX_ITERATIONS for {country}"
-                ],
+                "errors": errors,
             },
             goto=END,
         )
@@ -444,7 +517,7 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
    
 
     #If analysis shows no human review required: complete the current iteration.
-    final_status = get_route_check_status(decision)
+    final_status = helper_get_route_check_status(decision)
     update_response = save_route_check(
         {
             "identifier": "ROUTE_COMPLIANCE",
@@ -457,17 +530,17 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
                 "complianceStatus": final_status,
                 "riskLevel": decision["risk_level"],
                 "confidenceScore": decision["confidence_score"],
-                "requiredDocuments": stringify_list(
+                "requiredDocuments": helper_stringify_list(
                     decision.get("required_documents", [])
                 ),
-                "missingDocuments": stringify_list(
+                "missingDocuments": helper_stringify_list(
                     decision.get("missing_documents", [])
                 ),
                 "regulationSummary": decision["summary"],
-                "companyPolicyResult": stringify_list(
+                "companyPolicyResult": helper_stringify_list(
                     decision.get("policy_conflicts", [])
                 ),
-                "evidenceReference": stringify_list(
+                "evidenceReference": helper_stringify_list(
                     decision.get("evidence_sources", [])
                 ),
                 "recommendedAction": decision[
@@ -493,7 +566,7 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
 
 
 def human_intervention_node(state: RouteComplianceWorkerState) -> Command[Literal["analyzer_node"]]:
-    req = state["regulation_requirement"]
+    requirement = state["regulation_requirement"]
     decision = state.get("route_decision", {})
     human_feedback = interrupt(
         {
@@ -502,8 +575,8 @@ def human_intervention_node(state: RouteComplianceWorkerState) -> Command[Litera
             "shipment_route_id": state["route_id"],
             "thread_id": state["shipment_id"],
             "iteration_number": state["iteration_count"],
-            "country": req["country"],
-            "route_type": req["route_type"],
+            "country": requirement["country"],
+            "route_type": requirement["route_type"],
             "current_decision": decision,
             "question": (
                 "Please provide clarification, approval, missing "
@@ -513,15 +586,16 @@ def human_intervention_node(state: RouteComplianceWorkerState) -> Command[Litera
     )
 
     feedback_entry = {
+        "iteration_number": state["iteration_count"],
+        "country": requirement["country"],
+        "route_type": requirement["route_type"],
         "human_input": human_feedback,
     }
 
-    existing_feedback = state.get("human_feedback")
-
-    if existing_feedback:
-        updated_feedback = f"{existing_feedback}\n\n{feedback_entry}"
-    else:
-        updated_feedback = str(feedback_entry)
+    updated_feedback = [
+        *state.get("human_feedback", []),
+        feedback_entry,
+    ]
 
     return Command(
         update={

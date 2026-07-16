@@ -1,0 +1,33 @@
+global:
+  trusted:
+    - who.int
+    - ema.europa.eu
+    - pmc.ncbi.nlm.nih.gov
+
+  excluded:
+    - linkedin.com
+    - facebook.com
+    - youtube.com
+    - tradeimex.in
+    - thepharmaletter.com
+
+countries:
+  India:
+    trusted:
+      - cdsco.gov.in
+      - dgft.gov.in
+      - cbic.gov.in
+
+  UAE:
+    trusted:
+      - mohap.gov.ae
+      - ede.gov.ae
+      - dubaicustoms.gov.ae
+
+  Germany:
+    trusted:
+      - bund.de
+      - bfarm.de
+      - pei.de
+      - zoll.de
+      - europa.eu

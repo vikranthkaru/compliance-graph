@@ -6,18 +6,12 @@ from pydantic import BaseModel, Field
 class RegulationRequirement(BaseModel):
     country: str = Field(description="Country for which regulations must be checked")
     route_type: str = Field(description="Origin, Transit or Destination")
-    regulation_need: str = Field(description="Type of regulation that needs to be verified")
-    authority_types: List[str] = Field(description="Types of official government or regulatory authorities responsible for the applicable regulations, such as Drug Regulatory Authority, Customs Authority, Ministry of Health, Civil Aviation Authority, or Dangerous Goods Authority")
     regulation_topics: List[str] = Field(description="Specific regulatory topics that must be searched, such as Export, Import, Transit, Prescription Medicine, Cold Chain, Controlled Substance, Hazardous Material, GDP, GMP, or Dangerous Goods")
-    search_query: str = Field(description="Optimized search query that will be used by the retrieval agent to discover official government regulatory sources")
-    why_this_applies: str = Field(description="Reason these regulatory requirements apply based on the shipment, product, transport mode, and route")
+    why_this_applies: list[str] = Field(description="Reason these regulatory requirements apply based on the shipment, product, transport mode, and route")
 
 
 class RegulationSearchPlan(BaseModel):
     regulation_requirements: List[RegulationRequirement]
-
-
-
 
 class RouteComplianceStatus(str, Enum):
     COMPLIANT = "COMPLIANT"
@@ -58,7 +52,6 @@ class RouteComplianceDecision(BaseModel):
     evidence_sources: List[str]
 
 
-
 class ShipmentComplianceDecision(BaseModel):
     shipment_id: str
     shipment_number: str
@@ -80,3 +73,23 @@ class ShipmentComplianceDecision(BaseModel):
     blocking_issues: List[str]
 
     recommended_next_action: str
+
+
+class SourceRerankResult(BaseModel):
+    source_index: int
+
+    relevance_score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Overall relevance score between 0 and 1",
+    )
+
+    country_match: bool
+    route_match: bool
+    topic_match: bool
+
+    selected: bool
+    reason: str
+
+class SourceRerankResponse(BaseModel):
+    results: list[SourceRerankResult]

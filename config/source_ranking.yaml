@@ -1,0 +1,60 @@
+weights:
+  tavily_score: 0.40
+  route_match: 0.20
+  topic_coverage: 0.30
+  document_specificity: 0.10
+
+route_keywords:
+  Origin:
+    - export
+    - outbound
+
+  Transit:
+    - transit
+    - in-transit
+    - bonded
+
+  Destination:
+    - import
+    - inbound
+
+topic_keywords:
+  Export:
+    - export
+
+  Import:
+    - import
+
+  Transit:
+    - transit
+    - in-transit
+
+  Prescription Medicine:
+    - prescription medicine
+    - prescription drug
+    - pharmaceutical
+    - human drug
+
+  Cold Chain:
+    - cold chain
+    - refrigerated
+    - temperature-controlled
+    - temperature controlled
+    - storage and transport
+
+  Customs Requirements:
+    - customs
+    - clearance
+    - declaration
+    - consignment
+
+document_specificity_terms:
+  - guidance
+  - guideline
+  - rules
+  - regulation
+  - notification
+  - circular
+  - policy
+  - manual
+  - .pdf
