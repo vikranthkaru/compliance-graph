@@ -2,6 +2,7 @@
 config/config.yaml
 config/salesforce.key
 config/testenv
+testenv
 
 .venv/
 __pycache__/
