@@ -221,19 +221,6 @@ Do not change or omit source_index values.
 """
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 ROUTE_ANALYZER_PROMPT = """
 You are a Route-Level Pharmaceutical Compliance Analyzer.
 
@@ -356,45 +343,3 @@ Rules:
 - Do not invent new evidence.
 - Do not make new compliance claims beyond the route decisions.
 """
-
-
-
-# SALESFORCE_POLICY_RETRIEVAL_PROMPT = """
-# You are a Pharmaceutical Company Policy Retrieval Agent.
-
-# Your responsibility is to retrieve relevant internal company policies from the available Salesforce/Data Cloud retrieval tools.
-
-# You MUST:
-# - Use the available retrieval tool.
-# - Retrieve policies relevant to the country, route role, product, storage type, cold chain requirement, transport mode, and regulation topics.
-# - Return only retrieved policy context.
-# - Include source or metadata when available.
-
-# You MUST NOT:
-# - Make compliance decisions.
-# - Compare policies with regulations.
-# - Invent company policies.
-# - Retrieve government regulations.
-
-# Payload:
-# {payload}
-# """
-
-
-# PINECONE_REGULATION_RETRIEVAL_PROMPT = """
-# You are a Pharmaceutical Government Regulation Retrieval Agent.
-
-# Your responsibility is to retrieve relevant external government regulation context from the available Pinecone retrieval tools.
-
-# You MUST:
-# - Use the available retrieval tool.
-# - Retrieve regulations relevant to the country, route role, product, storage type, cold chain requirement, transport mode, regulation need, and regulation topics.
-# - Return only retrieved regulation context.
-# - Include source URLs or metadata when available.
-
-# You MUST NOT:
-# - Make compliance decisions.
-# - Compare government regulations with company policies.
-# - Invent regulations.
-# - Retrieve internal company policies.
-# """

@@ -1,10 +1,11 @@
-import os, json, yaml, html, re, hashlib
+import os, yaml, html, re, hashlib
 from datetime import datetime, timezone
 from typing import List
 from pathlib import Path
 from tavily import TavilyClient
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_openai import OpenAIEmbeddings
 from llama_index.core.schema import TextNode
 from llm.factory import ( get_chat_model, get_structured_chat_model )
 from services.vector_service import ingest_data_pinecone
@@ -16,36 +17,38 @@ from agents.compliance_agent.schemas import (
 from agents.compliance_agent.prompts import (
     SOURCE_RERANKER_PROMPT
 )
-CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
-DOMAIN_CONFIG_FILE = CONFIG_DIR / "regulatory_domains.yaml"
-RANKING_CONFIG_FILE = CONFIG_DIR / "source_ranking.yaml"
-_RANKING_CONFIG: dict | None = None
+
+_SEMANTIC_EMBEDDINGS = OpenAIEmbeddings(
+    model="text-embedding-3-small",
+)
+
+_SEMANTIC_CHUNKER = SemanticChunker(
+    embeddings=_SEMANTIC_EMBEDDINGS,
+    breakpoint_threshold_type="percentile",
+    breakpoint_threshold_amount=90,
+    min_chunk_size=300,
+)
+from config.loader import load_yaml
+
 _DOMAIN_CONFIG: dict | None = None
 
 def load_regulatory_domains() -> dict:
     global _DOMAIN_CONFIG
+
     if _DOMAIN_CONFIG is None:
-        with open(
-            DOMAIN_CONFIG_FILE,
-            "r",
-            encoding="utf-8",
-        ) as file:
-            _DOMAIN_CONFIG = yaml.safe_load(file) or {}
+        _DOMAIN_CONFIG = load_yaml("regulatory_domains.yaml")
 
     return _DOMAIN_CONFIG
 
+_RANKING_CONFIG: dict | None = None
+
 def load_source_ranking() -> dict:
     global _RANKING_CONFIG
+
     if _RANKING_CONFIG is None:
-        with open(
-            RANKING_CONFIG_FILE,
-            "r",
-            encoding="utf-8",
-        ) as file:
-            _RANKING_CONFIG = yaml.safe_load(file) or {}
+        _RANKING_CONFIG = load_yaml("source_ranking.yaml")
 
     return _RANKING_CONFIG
-
 
 def get_domain_rules(country: str) -> tuple[list[str], list[str]]:
     config = load_regulatory_domains()
@@ -562,34 +565,17 @@ def helper_extract_url_content_and_ingest(
                 f"{len(cleaned_text)} characters"
             )
 
-            document_sections = split_large_document(cleaned_text)
-            generated_chunks = []
-            for section_number, section_text in enumerate(
-                document_sections,
-                start=1,
-            ):
-                try:
-                    section_chunks = llm_cleaner_helper(
-                        raw_text=section_text,
-                        country=country,
-                        role=role,
-                        regulation_topics=regulation_topics,
-                        why_this_applies=why_this_applies,
-                    )
+            generated_chunks = create_semantic_regulatory_chunks(
+                cleaned_text=cleaned_text,
+                country=country,
+                role=role,
+                regulation_topics=regulation_topics,
+            )
 
-                    for chunk in section_chunks:
-                        generated_chunks.append(
-                            {
-                                **chunk,
-                                "source_section": section_number,
-                            }
-                        )
-
-                except Exception as exc:
-                    print(
-                        f"Unable to process section {section_number} "
-                        f"for {url}: {exc}"
-                    )
+            print(
+                f"Semantic chunking for {url}: "
+                f"{len(generated_chunks)} chunks created"
+            )
 
             unique_chunks = remove_duplicate_chunks(
                 generated_chunks
@@ -691,151 +677,60 @@ def helper_extract_url_content_and_ingest(
             )
             continue
 
-
-def llm_cleaner_helper(
-    raw_text: str,
+def create_semantic_regulatory_chunks(
+    cleaned_text: str,
     country: str,
     role: str,
     regulation_topics: list[str],
-    why_this_applies: list[str],
 ) -> list[dict]:
-    """
-    Splits regulatory content into semantic chunks and enriches
-    each chunk with route-specific regulatory context.
+    if not cleaned_text:
+        return []
 
-    Falls back to recursive character chunking if LLM processing fails.
-    """
-
-    llm = get_chat_model()
+    document_sections = split_large_document(
+        cleaned_text=cleaned_text,
+        chunk_size=50_000,
+        chunk_overlap=1_000,
+    )
 
     topic_text = ", ".join(regulation_topics)
-    why_this_applies_text = "\n".join(
-        f"- {reason}"
-        for reason in why_this_applies
+
+    context_header = (
+        f"Country: {country}\n"
+        f"Route role: {role}\n"
+        f"Regulation topics: {topic_text}"
     )
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """
-You are an AI data-enrichment component in a pharmaceutical regulatory ingestion pipeline.
+    generated_chunks = []
 
-Your input is text extracted from a potentially relevant regulatory webpage.
-
-Create logical, standalone semantic chunks from the supplied text.
-
-For each chunk:
-
-- Preserve only content relevant to the regulatory requirement.
-- Add a concise context header.
-- Do not invent regulations or requirements.
-- Do not claim that the source is official unless the supplied content supports that conclusion.
-- Exclude navigation menus, cookie notices, unrelated promotional content, and duplicate text.
-
-Route context:
-
-Country: {country}
-Route role: {role}
-Regulation topics: {regulation_topics}
-Reason this information applies:
-{why_this_applies}
-
-Return strictly a valid JSON array.
-Do not return Markdown or code fences.
-
-Each object must have exactly this structure:
-
-{{
-    "chunk_text": "Context header. Relevant regulatory content."
-}}
-""",
-            ),
-            (
-                "human",
-                "Analyze and segment this webpage content:\n\n{text}",
-            ),
-        ]
-    )
-
-    chain = prompt | llm
-
-    try:
-        response = chain.invoke(
-            {
-                "text": raw_text,
-                "country": country,
-                "role": role,
-                "regulation_topics": topic_text,
-                "why_this_applies": why_this_applies_text,
-            }
+    for section_number, section_text in enumerate(
+        document_sections,
+        start=1,
+    ):
+        semantic_documents = _SEMANTIC_CHUNKER.create_documents(
+            [section_text]
         )
 
-        clean_content = response.content.strip()
-        clean_content = clean_content.removeprefix("```json")
-        clean_content = clean_content.removeprefix("```")
-        clean_content = clean_content.removesuffix("```").strip()
+        for semantic_index, document in enumerate(
+            semantic_documents,
+            start=1,
+        ):
+            chunk_content = document.page_content.strip()
 
-        chunks = json.loads(clean_content)
+            if not chunk_content:
+                continue
 
-        if not isinstance(chunks, list):
-            raise ValueError(
-                "LLM cleaner response is not a JSON array"
+            generated_chunks.append(
+                {
+                    "chunk_text": (
+                        f"{context_header}\n\n"
+                        f"{chunk_content}"
+                    ),
+                    "source_section": section_number,
+                    "semantic_chunk_index": semantic_index,
+                }
             )
 
-        valid_chunks = [
-            {
-                **chunk,
-                "chunk_text": chunk["chunk_text"].strip(),
-            }
-            for chunk in chunks
-            if (
-                isinstance(chunk, dict)
-                and isinstance(
-                    chunk.get("chunk_text"),
-                    str,
-                )
-                and chunk["chunk_text"].strip()
-            )
-        ]
-
-        if not valid_chunks:
-            raise ValueError(
-                "LLM cleaner returned no valid chunks"
-            )
-
-        return valid_chunks
-
-    except Exception as exc:
-        print(
-            f"LLM chunking failed: {exc}. "
-            "Falling back to recursive chunking."
-        )
-
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=100,
-            separators=["\n\n", "\n", " ", ""],
-        )
-
-        raw_chunks = text_splitter.split_text(raw_text)
-
-        context_header = (
-            f"Country: {country}; "
-            f"Route role: {role}; "
-            f"Topics: {topic_text}"
-        )
-
-        return [
-            {
-                "chunk_text": (
-                    f"{context_header}\n\n{chunk.strip()}"
-                )
-            }
-            for chunk in raw_chunks
-            if chunk.strip()
-        ]
-
+    return generated_chunks
 
 def helper_stringify_list(values: list | None) -> str:
     return "\n".join(str(value) for value in (values or []))

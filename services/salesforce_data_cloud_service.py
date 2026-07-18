@@ -1,8 +1,8 @@
 from pathlib import Path
 
-import yaml
+from config.loader import load_yaml
 from salesforcecdpconnector.connection import SalesforceCDPConnection
-
+from config.loader import load_yaml
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
@@ -12,15 +12,14 @@ def get_data_cloud_connection() -> SalesforceCDPConnection:
     Creates and returns an authenticated Salesforce Data Cloud connection.
     """
 
-    config_file = CONFIG_DIR / "config.yaml"
     private_key_file = CONFIG_DIR / "salesforce.key"
-
-    with open(config_file, "r") as f:
-        config = yaml.safe_load(f)
+    
 
     with open(private_key_file, "r") as f:
         private_key = f.read()
 
+
+    config = load_yaml("config.yaml")
     sf_config = config["salesforce"]
 
     _connection = SalesforceCDPConnection(

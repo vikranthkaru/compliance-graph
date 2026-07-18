@@ -31,3 +31,8 @@ ipython
 salesforce-cdp-connector
 pyyaml
 simple_salesforce
+grpcio 
+grpcio-tools 
+avro 
+requests
+langchain_experimental
