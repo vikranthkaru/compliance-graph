@@ -24,7 +24,8 @@ from agents.compliance_agent.helpers import (
     helper_rerank_regulatory_sources,
     helper_extract_url_content_and_ingest,
     helper_get_route_check_status,
-    helper_stringify_list
+    helper_stringify_list,
+    helper_delete_namespace_pinecone
 )
 from services.salesforce_service import save_route_check
 
@@ -90,6 +91,23 @@ def validate_shipment_context(state: ComplianceState) -> dict:
 
             if not route.get("routeType"):
                 errors.append(f"Route {index} type is missing")
+    
+    shipment_context = state["shipment_context"]
+    shipment_id = state["shipment_context"]["shipment"]["shipmentId"]
+    product_id = state["shipment_context"]["product"]["productId"]
+    insert_response = save_route_check(
+        {
+            "identifier": "SHIPMENT_COMPLIANCE",
+            "routeCheck": {
+                "shipmentDetailId": shipment_id,
+                "productId": product_id,
+                "overallStatus": "In Progress"
+            },
+        }
+    )
+    if not insert_response.get("success"):
+        errors.append(f"Compliance check record creation failed in Salesforce")
+    
 
     return {
         "errors": errors
@@ -234,14 +252,36 @@ def final_compliance_summary_node(state):
     route_results = state.get("route_compliance_results", {})
 
     llm = get_structured_chat_model(ShipmentComplianceDecision)
-
+    shipment_context = state["shipment_context"]
+    shipment_id = state["shipment_context"]["shipment"]["shipmentId"]
+    product_id = state["shipment_context"]["product"]["productId"]
+    namespace = f"shipment-{shipment_id}"
     response = llm.invoke(
         FINAL_COMPLIANCE_SUMMARY_PROMPT.format(
             shipment_context=shipment_context,
             route_compliance_results=route_results,
         )
     )
-
+    decision = response.model_dump()
+    save_route_check(
+        {
+            "identifier": "SHIPMENT_COMPLIANCE",
+            "routeCheck": {
+                "shipmentDetailId": shipment_id,
+                "productId": product_id,
+                "overallStatus": decision["overall_status"],
+                "overallRiskLevel": decision["overall_risk_level"],
+                "aiReasoning": decision["ai_reasoning"],
+                "anomaliesFound": "\n".join(decision["blocking_issues"]),
+                "evidenceSummary": "\n".join(decision["evidence_summary"]),
+                "missingDocuments": "\n".join(decision["missing_documents"]),
+                "recommendedAction": decision["recommended_next_action"],
+                "humanReviewRequired": decision["human_review_required"],
+                "confidenceScore": decision["confidence_score"],
+            },
+        }
+    )
+    helper_delete_namespace_pinecone(namespace=namespace)
     return {
         "compliance_result": response.model_dump()
     }
@@ -566,9 +606,17 @@ def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_in
 
 
 def human_intervention_node(state: RouteComplianceWorkerState) -> Command[Literal["analyzer_node"]]:
+    """
+    Pauses one route worker for human compliance review.
+
+    After Salesforce publishes a re-review event, the structured
+    reviewer response is returned by interrupt(). The feedback is
+    appended to the worker state, and the route is sent back to the
+    analyzer for re-evaluation.
+    """
     requirement = state["regulation_requirement"]
     decision = state.get("route_decision", {})
-    human_feedback = interrupt(
+    reviewer_response = interrupt(
         {
             "message": "Human compliance review required.",
             "shipment_id": state["shipment_id"],
@@ -589,7 +637,10 @@ def human_intervention_node(state: RouteComplianceWorkerState) -> Command[Litera
         "iteration_number": state["iteration_count"],
         "country": requirement["country"],
         "route_type": requirement["route_type"],
-        "human_input": human_feedback,
+        "human_input": reviewer_response.get("reviewer_comments"),
+        "reviewer_decision": reviewer_response.get("reviewer_decision"),
+        "reviewed_by": reviewer_response.get("reviewed_by"),
+        "reviewed_at": reviewer_response.get("reviewed_at"),
     }
 
     updated_feedback = [
@@ -636,5 +687,4 @@ def subgraph_reducer_node(state: RouteComplianceWorkerState):
             route_key: final_data
         }
     }
-
 

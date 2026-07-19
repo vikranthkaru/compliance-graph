@@ -1,6 +1,6 @@
 from langchain_openai import ChatOpenAI
 from langchain_qwq import ChatQwen
-from llm.config import settings
+from config.settings import settings
 def get_chat_model():
     #Sprint(f"settings.chat_provider==>{settings.chat_provider}")
     if settings.chat_provider ==  "qwen":
@@ -34,23 +34,19 @@ def get_react_agent(tools, system_prompt: str):
         system_prompt=system_prompt,
     )
 
-
-# from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+# from inspect import signature
 from llama_index.embeddings.openai import OpenAIEmbedding
 def get_embedding_model():
-    if settings.embedding_provider == "openai":
-        return OpenAIEmbedding(
-            model=settings.embedding_model,
-            api_key=settings.embedding_api_key,
-            api_base=settings.embedding_base_url or None,
+    if settings.embedding_provider not in ("openai", "qwen"):
+        raise ValueError(
+            f"Unsupported embedding provider: {settings.embedding_provider}"
         )
-    
-    # if settings.embedding_provider == "qwen":
-    #     return HuggingFaceEmbedding(
-    #         model_name=settings.embedding_model,
-    #         device=settings.embedding_device
-    #     )
-    
-    raise ValueError(
-        f"Unsupported embedding provider: {settings.embedding_provider}"
+
+    return OpenAIEmbedding(
+        model_name=settings.embedding_model,
+        api_key=settings.embedding_api_key,
+        api_base=settings.embedding_base_url or None,
+        embed_batch_size=8,
+        dimensions=1024,
     )
+    

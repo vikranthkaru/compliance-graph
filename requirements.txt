@@ -36,3 +36,5 @@ grpcio-tools
 avro 
 requests
 langchain_experimental
+llama-index-embeddings-dashscope
+langgraph-checkpoint-mongodb

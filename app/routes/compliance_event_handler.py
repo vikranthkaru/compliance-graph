@@ -1,5 +1,6 @@
 from uuid import uuid4
-
+from typing import Any
+from langgraph import graph
 from langgraph.types import Command
 
 from agents.compliance_agent.graph import build_compliance_graph
@@ -46,6 +47,13 @@ def handle_new_compliance_event(
         config=config,
     )
 
+    snapshot = graph.get_state(config)
+
+    print("Thread ID:", thread_id)
+    print("Next nodes:", snapshot.next)
+    print("Checkpoint config:", snapshot.config)
+    print("Interrupts:", result.get("__interrupt__", []))
+
     process_interrupts(
         result=result,
         thread_id=thread_id,
@@ -55,20 +63,70 @@ def handle_new_compliance_event(
 
 
 def handle_resume_compliance_event(
-    event_payload: dict,
+    event_message: dict[str, Any],
 ) -> dict:
     """
-    Resumes an interrupted compliance workflow.
+    Resumes one interrupted route-compliance worker.
+
+    Supports both formats:
+
+    1. Full Salesforce Pub/Sub message:
+       {
+           "schema": "...",
+           "payload": {
+               "ThreadId__c": "...",
+               "InterruptId__c": "...",
+               ...
+           },
+           "event": {...}
+       }
+
+    2. Flattened event payload:
+       {
+           "ThreadId__c": "...",
+           "InterruptId__c": "...",
+           ...
+       }
     """
+    event_payload = event_message.get(
+        "payload",
+        event_message,
+    )
+    event_type = event_payload.get("EventType__c")
+    if event_type != "ROUTE_COMPLIANCE_RETRIGGERED":
+        raise ValueError(
+            "Unsupported compliance resume event type: "
+            f"{event_type}"
+        )
+    thread_id = event_payload.get("ThreadId__c")
+    interrupt_id = event_payload.get("InterruptId__c")
+    route_check_id = event_payload.get(
+        "ComplianceRouteCheckId__c"
+    )
+    reviewer_comments = event_payload.get(
+        "ReviewerComments__c"
+    )
+    missing_fields = []
 
-    graph = build_compliance_graph()
+    if not thread_id:
+        missing_fields.append("ThreadId__c")
 
-    thread_id = event_payload["ThreadId__c"]
-    interrupt_id = event_payload["InterruptId__c"]
+    if not interrupt_id:
+        missing_fields.append("InterruptId__c")
 
-    resume_payload = {
-        interrupt_id: event_payload["Reason__c"]
-    }
+    if not route_check_id:
+        missing_fields.append(
+            "ComplianceRouteCheckId__c"
+        )
+
+    if not reviewer_comments:
+        missing_fields.append("ReviewerComments__c")
+
+    if missing_fields:
+        raise ValueError(
+            "Missing required resume event fields: "
+            + ", ".join(missing_fields)
+        )
 
     config = {
         "configurable": {
@@ -76,8 +134,40 @@ def handle_resume_compliance_event(
         }
     }
 
+    reviewer_response = {
+        "event_type": event_type,
+        "event_id": event_payload.get("Event_Id__c"),
+        "route_check_id": route_check_id,
+        "reviewer_comments": reviewer_comments,
+        "reviewed_by": event_payload.get(
+            "Triggered_By__c"
+        ),
+        "reviewed_at": event_payload.get(
+            "Triggered_At__c"
+        ),
+        "reason": event_payload.get("Reason__c"),
+        "shipment_id": event_payload.get(
+            "ShipmentId__c"
+        ),
+        "shipment_number": event_payload.get(
+            "ShipmentNumber__c"
+        ),
+        "compliance_check_id": event_payload.get(
+            "complianceCheckId__c"
+        ),
+    }
+
+    # Resume only the worker associated with this interrupt ID.
+    resume_payload = {
+        interrupt_id: reviewer_response
+    }
+
+    graph = build_compliance_graph()
+
     result = graph.invoke(
-        Command(resume=resume_payload),
+        Command(
+            resume=resume_payload,
+        ),
         config=config,
     )
 

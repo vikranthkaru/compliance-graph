@@ -1,6 +1,6 @@
 import os, yaml, html, re, hashlib
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Mapping
 from pathlib import Path
 from tavily import TavilyClient
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -8,7 +8,7 @@ from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai import OpenAIEmbeddings
 from llama_index.core.schema import TextNode
 from llm.factory import ( get_chat_model, get_structured_chat_model )
-from services.vector_service import ingest_data_pinecone
+from services.vector_service import (ingest_data_pinecone,delete_shipment_namespace)
 from agents.compliance_agent.schemas import (
     RouteComplianceDecision,
     RouteComplianceStatus,
@@ -735,20 +735,38 @@ def create_semantic_regulatory_chunks(
 def helper_stringify_list(values: list | None) -> str:
     return "\n".join(str(value) for value in (values or []))
 
-
+from collections.abc import Mapping
 def helper_get_route_check_status(
     decision: RouteComplianceDecision,
 ) -> str:
-    if decision.human_intervention_required:
+    print(f"Evaluating route check status for decision: {decision}")
+    if isinstance(decision, Mapping):
+        human_review = decision.get("human_intervention_required", False)
+        status = decision.get("compliance_status")
+    else:
+        human_review = decision.human_intervention_required
+        status = decision.compliance_status
+
+    # Handle Enum or string
+    if hasattr(status, "value"):
+        status = status.value
+
+    if human_review:
         return "Review Required"
 
-    if decision.compliance_status == RouteComplianceStatus.COMPLIANT:
+    if status == "COMPLIANT":
         return "Passed"
 
-    if decision.compliance_status in (
-        RouteComplianceStatus.NON_COMPLIANT,
-        RouteComplianceStatus.BLOCKED,
-    ):
+    if status in ("NON_COMPLIANT", "BLOCKED"):
         return "Blocked"
 
     return "Failed"
+
+
+def helper_delete_namespace_pinecone(namespace: str | None = None):
+    """
+    Deletes all regulatory content for a specific shipment namespace
+    from the Pinecone vector store.
+    """
+
+    delete_shipment_namespace(namespace=namespace)

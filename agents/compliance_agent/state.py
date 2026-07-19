@@ -1,7 +1,15 @@
 from enum import Enum
-from typing import TypedDict, Dict, Any, List, Optional
+from typing import Annotated, TypedDict, Dict, Any, List, Optional
 # from agents.compliance_agent.schemas import RouteComplianceDecision
 
+def merge_route_compliance_results(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        **(left or {}),
+        **(right or {}),
+    }
 # ===========================
 # Main Graph State
 # ===========================
@@ -13,7 +21,11 @@ class ComplianceState(TypedDict):
     regulation_search_plan: Dict | None
 
     # Aggregated route decisions after fan-in
-    route_compliance_results: Dict[str, Dict[str, Any]]
+    route_compliance_results: Annotated[
+        dict[str, Any],
+        merge_route_compliance_results,
+    ]
+
 
     compliance_result: Dict | None
 

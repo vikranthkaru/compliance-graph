@@ -57,20 +57,28 @@ class ShipmentComplianceDecision(BaseModel):
     shipment_number: str
 
     overall_status: str = Field(
-        description="Overall shipment compliance status: COMPLIANT, REVIEW_REQUIRED, NON_COMPLIANT, or BLOCKED"
+        description="COMPLIANT, REVIEW_REQUIRED, NON_COMPLIANT, or BLOCKED"
     )
 
     overall_risk_level: str = Field(
-        description="Overall shipment risk level: LOW, MEDIUM, HIGH, or CRITICAL"
+        description="LOW, MEDIUM, HIGH, or CRITICAL"
     )
+
+    confidence_score: float
+
+    human_review_required: bool
 
     summary: str
 
+    ai_reasoning: str
+
     route_summary: List[dict]
 
-    human_review_required_routes: List[str]
-
     blocking_issues: List[str]
+
+    missing_documents: List[str]
+
+    evidence_summary: List[str]
 
     recommended_next_action: str
 

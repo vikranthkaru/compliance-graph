@@ -185,3 +185,15 @@ def fetch_data_from_pinecone(
     )
 
     return query_engine.query(query_text)
+
+
+def delete_shipment_namespace( namespace: str | None = None,) -> None:
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    existing_indexes = pc.list_indexes().names()
+    if INDEX_NAME in existing_indexes:
+        pinecone_index = pc.Index(INDEX_NAME)
+        
+    pinecone_index.delete(
+        delete_all=True,
+        namespace=namespace,
+    )

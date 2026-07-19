@@ -16,9 +16,10 @@ from agents.compliance_agent.edges import (
     route_splitter
 )
 
-from graphs.checkpointer import checkpointer
+from memory import get_memory
 from langgraph.types import RetryPolicy
 
+memory = get_memory()
 
 retry_policy = RetryPolicy(
     max_attempts=3,
@@ -67,5 +68,5 @@ def build_compliance_graph():
         graph.add_edge("compliance_parallel_subgraph", "final_compliance_summary_node")
         graph.add_edge("final_compliance_summary_node", END)
         return graph.compile(
-            checkpointer=checkpointer
+            checkpointer=memory
         )
