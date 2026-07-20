@@ -149,7 +149,7 @@ def subscribe_to_compliance_events() -> None:
         client.close()
 
 
-def main() -> None:
+def start() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format=(
@@ -160,6 +160,10 @@ def main() -> None:
     )
 
     subscribe_to_compliance_events()
+
+
+def main() -> None:
+    start()
 
 
 if __name__ == "__main__":
