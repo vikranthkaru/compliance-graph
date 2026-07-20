@@ -32,3 +32,10 @@ __pycache__/
 # Environment files
 .env
 .env.*
+
+.env
+.env.*
+config/salesforce.key
+config/*.key
+__pycache__/
+*.pyc
