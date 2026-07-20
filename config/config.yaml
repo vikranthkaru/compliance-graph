@@ -1,0 +1,7 @@
+salesforce:
+    login_url: "${SALESFORCE_LOGIN_URL}"
+    username: "${SALESFORCE_USERNAME}"
+    connected_app:
+      client_id: "${SALESFORCE_CLIENT_ID}"
+    org_id: "${SALESFORCE_ORG_ID}"
+    JWT_PRIVATE_KEY_BASE64: "${SALESFORCE_PRIVATE_KEY}"

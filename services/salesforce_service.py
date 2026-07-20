@@ -1,27 +1,28 @@
-from pathlib import Path
+import logging
 from typing import Any
 from simple_salesforce import Salesforce
 from config.loader import load_yaml
-CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+from config.security import get_private_key_file
+
+logger = logging.getLogger(__name__)
+
 def get_salesforce_cloud_connection() -> Salesforce:
     """
     Creates and returns an authenticated Salesforce Data Cloud connection.
     """
-
-    private_key_file = CONFIG_DIR / "salesforce.key"
-
-
     config = load_yaml("config.yaml")
     sf_config = config["salesforce"]
     try:
         sf = Salesforce(
         consumer_key=sf_config["connected_app"]["client_id"],
         username=sf_config["username"],
-        privatekey_file=private_key_file
+        privatekey_file=get_private_key_file()
         )
         return sf
     except Exception as e:
-        print(f"Connection establishment failed: {e}")
+        logger.exception(
+            "Salesforce Core connection establishment failed"
+        )
         raise
 
 

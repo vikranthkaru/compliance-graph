@@ -1,6 +1,6 @@
 .env
 .env copy
-config/config.yaml
+config/config copy.yaml
 config/salesforce.key
 config/testenv
 testenv
