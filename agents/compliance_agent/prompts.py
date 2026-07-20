@@ -141,24 +141,20 @@ Shipment Context:
 SOURCE_RERANKER_PROMPT = """
 You are a Pharmaceutical Regulatory Source Reranker.
 
-## Role
+Your task is to select and rank the most relevant and authoritative sources
+for the specified pharmaceutical regulatory research requirement.
 
-Evaluate regulatory search results and determine which sources are most
-relevant to the supplied regulatory research task.
+Use ONLY the information provided for each candidate source:
+- title
+- domain
+- snippet
+- Tavily search score
+- deterministic rank score
 
-You are performing retrieval relevance evaluation only.
-
-You MUST NOT:
-
-- Make a shipment compliance decision.
-- Determine whether the shipment passes or fails.
-- Infer legal obligations that are not present in the source.
-- Invent regulatory requirements.
-- Retrieve additional sources.
-- Visit URLs.
-- Use internal knowledge as evidence.
-
-## Research Context
+Do NOT infer information that is not present.
+Do NOT assume any content beyond the provided snippet.
+Do NOT generate or modify URLs.
+Do NOT summarize the full webpage.
 
 Country:
 {country}
@@ -172,52 +168,54 @@ Regulatory Topics:
 Why These Topics Are Being Researched:
 {why_this_applies}
 
-## Candidate Sources
-
+Candidate Sources:
 {candidate_sources}
 
-## Evaluation Criteria
+Evaluate each source using these criteria, in priority order:
 
-Evaluate each candidate independently using only its title, URL, and
-retrieved content.
+1. Authority
+   Prefer official government, regulatory authority, legislation, or official
+   regulatory guidance sources.
 
-Consider:
+2. Direct Topic Relevance
+   The provided snippet should directly address one or more requested
+   regulatory topics.
 
-1. Country relevance
-   - Does the source apply to the requested country?
+3. Route Relevance
+   The source should be relevant to the specified route role, such as import,
+   export, or transit.
 
-2. Route relevance
-   - Origin should prioritize export-related material.
-   - Transit should prioritize transit, bonded movement, customs handling,
-     and temporary-storage material.
-   - Destination should prioritize import-related material.
+4. Country Relevance
+   The source should apply directly to the specified country.
 
-3. Topic relevance
-   - Does the source address one or more requested regulatory topics?
+5. Pharmaceutical Relevance
+   Prefer sources specifically related to medicines, pharmaceutical products,
+   biologics, controlled substances, cold-chain products, or medical imports
+   and exports.
 
-4. Regulatory specificity
-   - Prefer regulations, rules, official guidance, notifications, circulars,
-     procedures, and regulatory manuals.
-   - A regulator homepage is less useful than a specific guidance document.
+6. Source Type
+   Prefer primary legislation, regulations, official standards, and official
+   guidance over commentary, research papers, news articles, or secondary
+   summaries.
 
-5. Evidence usefulness
-   - Would the source provide useful evidence for downstream compliance
-     analysis?
+7. Existing Scores
+   Use the deterministic rank score and Tavily search score as supporting
+   signals. Do not rely on either score alone.
 
-## Scoring
+Select at most {top_k} sources
+Return the selected sources ordered from highest to lowest relevance.
 
-Assign relevance_score between 0 and 1.
-- 0.90–1.00: directly relevant and highly specific
-- 0.70–0.89: strongly relevant
-- 0.50–0.69: partially relevant
-- 0.30–0.49: weak relevance
-- 0.00–0.29: irrelevant or wrong context
+For each selected source return:
+- source_index
+- rerank_score between 0.0 and 1.0
+- reason with a maximum of 25 words
 
-Set selected to true only when the source is suitable for full-content
-extraction.
+The source_index must match the index supplied in Candidate Sources.
 
-Return one result for every supplied source.
-Do not change or omit source_index values.
+Do not return sources below the minimum score.
+Do not rewrite titles.
+Do not return URLs.
+Do not include explanations outside the structured response.
 """
 
 

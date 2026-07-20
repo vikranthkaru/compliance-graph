@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import List
 from pydantic import BaseModel, Field
 
 
@@ -15,8 +15,8 @@ class RegulationSearchPlan(BaseModel):
 
 class RouteComplianceStatus(str, Enum):
     COMPLIANT = "COMPLIANT"
-    REVIEW_REQUIRED = "REVIEW REQUIRED"
-    NON_COMPLIANT = "NON COMPLIANT"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    NON_COMPLIANT = "NON_COMPLIANT"
     BLOCKED = "BLOCKED"
 
 class ConfidenceLevel(str, Enum):

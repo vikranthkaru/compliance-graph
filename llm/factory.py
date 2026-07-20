@@ -2,7 +2,6 @@ from langchain_openai import ChatOpenAI
 from langchain_qwq import ChatQwen
 from config.settings import settings
 def get_chat_model():
-    #Sprint(f"settings.chat_provider==>{settings.chat_provider}")
     if settings.chat_provider ==  "qwen":
         return ChatQwen(
             model=settings.chat_model,
@@ -34,7 +33,6 @@ def get_react_agent(tools, system_prompt: str):
         system_prompt=system_prompt,
     )
 
-# from inspect import signature
 from llama_index.embeddings.openai import OpenAIEmbedding
 def get_embedding_model():
     if settings.embedding_provider not in ("openai", "qwen"):

@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     chat_api_key: str
     chat_base_url: str = ""
 
-    embedding_provider: str = "openai"
+    embedding_provider: str = "qwen"
     embedding_model: str
     embedding_api_key: str
     embedding_base_url: str = ""

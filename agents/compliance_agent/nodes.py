@@ -1,11 +1,11 @@
-from xml.parsers.expat import errors
-
 from agents.compliance_agent.state import ComplianceState,RouteComplianceWorkerState
 from langgraph.types import Command,interrupt
 from langgraph.constants import END
 from typing import Literal
+import logging
+logger = logging.getLogger(__name__)
 
-from llm.factory import get_structured_chat_model, get_react_agent
+from llm.factory import get_structured_chat_model
 from agents.compliance_agent.schemas import (
     RegulationSearchPlan,
     RouteComplianceDecision,
@@ -28,8 +28,6 @@ from agents.compliance_agent.helpers import (
     helper_delete_namespace_pinecone
 )
 from services.salesforce_service import save_route_check
-
-from services.vector_service import fetch_data_from_pinecone
 from tools.rag_tools import ( fetch_company_policy_from_data_cloud, search_government_regulations )
 
 
@@ -98,7 +96,7 @@ def validate_shipment_context(state: ComplianceState) -> dict:
     insert_response = save_route_check(
         {
             "identifier": "SHIPMENT_COMPLIANCE",
-            "routeCheck": {
+            "shipmentCompliance": {
                 "shipmentDetailId": shipment_id,
                 "productId": product_id,
                 "overallStatus": "In Progress"
@@ -123,7 +121,7 @@ def identify_regulation_requirements(state:ComplianceState) -> ComplianceState:
         )
     )
     search_plan = response.model_dump(mode="json")
-    print(f"Regulation Search Plan: {search_plan}")
+    logger.info(f"Regulation Search Plan: {search_plan}")
 
     return {
         "regulation_search_plan": search_plan
@@ -157,7 +155,7 @@ def index_regulation_content(state:ComplianceState)-> dict:
             regulation_topics=regulation_topics,
             shipment_context=shipment_context,
         )
-        print(
+        logger.info(
             f"Regulation search query for {country}: "
             f"{search_query}"
         )
@@ -176,9 +174,9 @@ def index_regulation_content(state:ComplianceState)-> dict:
             top_k=3,
             minimum_score=0.60,
         )
-        print(f"\n===== RERANKED SOURCES: {country} / {route_type} =====")
+        logger.info(f"\n===== RERANKED SOURCES: {country} / {route_type} =====")
         for source in reranked_results:
-            print(
+            logger.info(
                 {
                     "title": source.get("title"),
                     "url": source.get("url"),
@@ -187,11 +185,6 @@ def index_regulation_content(state:ComplianceState)-> dict:
                     "reason": source.get("rerank_reason"),
                 }
             )
-        
-        urls = [
-            source["url"]
-            for source in reranked_results
-        ]
 
         helper_extract_url_content_and_ingest(
             sources=reranked_results,
@@ -204,48 +197,6 @@ def index_regulation_content(state:ComplianceState)-> dict:
         )
 
     return {}
-
-#test-node
-def test_regulation_retrieval(state) -> dict:
-    shipment_context = state["shipment_context"]
-    product = shipment_context["product"]
-    route = shipment_context["route"]
-
-    queries = []
-
-    for stop in route:
-        country = stop["country"]
-        route_type = stop["routeType"]
-
-        query = (
-            f"{country} {route_type} regulations for "
-            f"{product['productName']} {product['drugCategory']} "
-            f"{product['storageType']} pharmaceutical shipment"
-        )
-
-        queries.append(query)
-
-    retrieval_results = {}
-
-    for query in queries:
-        nodes = fetch_data_from_pinecone(
-            query_text=query,
-            similarity_top_k=3,
-            raw_nodes_only=True
-        )
-
-        retrieval_results[query] = [
-            {
-                "text": node.text[:500],
-                "metadata": node.metadata
-            }
-            for node in nodes
-        ]
-
-    return {
-        "retrieval_test_result": retrieval_results
-    }
-
 
 def final_compliance_summary_node(state):
     shipment_context = state["shipment_context"]
@@ -266,7 +217,7 @@ def final_compliance_summary_node(state):
     save_route_check(
         {
             "identifier": "SHIPMENT_COMPLIANCE",
-            "routeCheck": {
+            "shipmentCompliance": {
                 "shipmentDetailId": shipment_id,
                 "productId": product_id,
                 "overallStatus": decision["overall_status"],
@@ -287,7 +238,6 @@ def final_compliance_summary_node(state):
     }
 
 #---------------------------Sub Graphs----------#
-#removing agent from salesforce node as Your Data Cloud vector index already performs semantic retrieval, so the node only needs to construct a focused search string and call the tool function directly.
 def fetch_company_policy_context_node(
     state: RouteComplianceWorkerState,
 ) -> dict:
@@ -321,7 +271,7 @@ def fetch_company_policy_context_node(
             )
         )
         result_count = len(company_policy_context)
-        print(
+        logger.info(
             "Salesforce company-policy retrieval completed for "
             f"{requirement['country']} / "
             f"{requirement['route_type']}: "
@@ -374,7 +324,7 @@ def fetch_external_policy_context_node(
             similarity_top_k=5,
         )
         
-        print(
+        logger.info(
             "Government-regulation retrieval completed for "
             f"{country} / {route_type}: "
             f"{len(government_regulation_context)} results found."
@@ -388,7 +338,7 @@ def fetch_external_policy_context_node(
         }
 
     except Exception as exc:
-        print(
+        logger.error(
             "Government-regulation retrieval failed for "
             f"{country} / {route_type}: {exc}"
         )
@@ -402,26 +352,6 @@ def fetch_external_policy_context_node(
                 f"{country} / {route_type}: {exc}"
             ],
         }
-# Subgraph starts
-# → Insert_New_Iteration
-# → iteration 1 created as In Progress
-
-# Analyzer requires human review
-# → Update_human_intervention
-# → iteration 1 updated to Review Required
-
-# Human responds
-# → Salesforce changes iteration 1 to Retriggered
-# → graph resumes
-
-# Analyzer requires another review
-# → Insert_New_Iteration
-# → iteration 1 changed to Failed
-# → iteration 2 created as In Progress
-
-# Human intervention node
-# → Update_human_intervention
-# → iteration 2 changed to Review Required
 
 
 def analyzer_node(state:RouteComplianceWorkerState) -> Command[Literal["human_intervention_node"]]:

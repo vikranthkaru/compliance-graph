@@ -1,34 +1,59 @@
-import os, yaml, html, re, hashlib
+#Standard Librayr
+import os, html, re, hashlib
 from datetime import datetime, timezone
-from typing import List, Mapping
-from pathlib import Path
+from typing import  Mapping
+import logging
+
+logger = logging.getLogger(__name__)
+
+#Third Party
 from tavily import TavilyClient
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_experimental.text_splitter import SemanticChunker
-from langchain_openai import OpenAIEmbeddings
 from llama_index.core.schema import TextNode
-from llm.factory import ( get_chat_model, get_structured_chat_model )
+from rank_bm25 import BM25Okapi
+
+#Local
+from llm.factory import ( get_structured_chat_model )
 from services.vector_service import (ingest_data_pinecone,delete_shipment_namespace)
 from agents.compliance_agent.schemas import (
     RouteComplianceDecision,
-    RouteComplianceStatus,
     SourceRerankResponse
 )
 from agents.compliance_agent.prompts import (
     SOURCE_RERANKER_PROMPT
 )
 
-_SEMANTIC_EMBEDDINGS = OpenAIEmbeddings(
-    model="text-embedding-3-small",
+from config.loader import load_yaml
+
+def tokenize(text: str) -> list[str]:
+    return re.findall(r"\b\w+\b", text.lower())
+
+_LARGE_DOCUMENT_SPLITTER = RecursiveCharacterTextSplitter(
+    chunk_size=50_000,
+    chunk_overlap=1_000,
+    separators=[
+        "\n\n",
+        "\n",
+        ". ",
+        " ",
+        "",
+    ],
 )
 
-_SEMANTIC_CHUNKER = SemanticChunker(
-    embeddings=_SEMANTIC_EMBEDDINGS,
-    breakpoint_threshold_type="percentile",
-    breakpoint_threshold_amount=90,
-    min_chunk_size=300,
+_REGULATORY_CHUNK_SPLITTER = RecursiveCharacterTextSplitter(
+    chunk_size=1200,
+    chunk_overlap=150,
+    separators=[
+        "\n\n",
+        "\n",
+        ". ",
+        "; ",
+        ": ",
+        " ",
+        "",
+    ],
 )
-from config.loader import load_yaml
+
 
 _DOMAIN_CONFIG: dict | None = None
 
@@ -237,6 +262,7 @@ def helper_rerank_regulatory_sources(
             regulation_topics=regulation_topics,
             why_this_applies=why_this_applies,
             candidate_sources=candidate_sources,
+            top_k=top_k,
         )
     )
 
@@ -315,12 +341,12 @@ def helper_search_regulatory_sources(
         filtered_results.append(result)
     
     
-    return rank_regulatory_sources(
+    ranked_results = rank_regulatory_sources(
         results=filtered_results,
         route_type=route_type,
         regulation_topics=regulation_topics,
     )
-
+    return ranked_results[:5]
 
 
 def clean_extracted_content(raw_text: str) -> str:
@@ -435,6 +461,73 @@ def remove_duplicate_chunks(
 
     return unique_chunks
 
+def build_bm25_query(
+    country: str,
+    role: str,
+    regulation_topics: list[str],
+    why_this_applies: str | list[str],
+) -> str:
+
+    if isinstance(why_this_applies, list):
+        why_this_applies = " ".join(why_this_applies)
+
+    return " ".join(
+        [
+            country,
+            role,
+            *regulation_topics,
+            why_this_applies,
+        ]
+    )
+
+def filter_chunks_with_bm25(
+    chunks: list[dict],
+    query: str,
+    top_k: int = 20,
+) -> list[dict]:
+
+    if not chunks:
+        return []
+
+    corpus = [
+        tokenize(chunk["chunk_text"])
+        for chunk in chunks
+    ]
+
+    bm25 = BM25Okapi(corpus)
+
+    query_tokens = tokenize(query)
+
+    scores = bm25.get_scores(query_tokens)
+
+    ranked = sorted(
+        zip(chunks, scores),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    filtered = []
+
+    for chunk, score in ranked[:top_k]:
+            filtered.append(
+                {
+                    **chunk,
+                    "bm25_score": round(float(score), 4),
+                }
+            )
+
+    # Fallback: keep the best chunk(s) if nothing met the threshold
+    if not filtered and ranked:
+        for chunk, score in ranked[:3]:
+            filtered.append(
+                {
+                    **chunk,
+                    "bm25_score": round(float(score), 4),
+                }
+            )
+
+    return filtered
+
 def validate_chunks(
     chunks: list[dict],
     min_characters: int = 200,
@@ -473,8 +566,7 @@ def validate_chunks(
 
 def split_large_document(
     cleaned_text: str,
-    chunk_size: int = 12000,
-    chunk_overlap: int = 500,
+    max_section_size: int = 50_000,
 ) -> list[str]:
     """
     Splits a large extracted document into manageable sections before
@@ -483,14 +575,13 @@ def split_large_document(
 
     if not cleaned_text:
         return []
+    
+    if len(cleaned_text) <= max_section_size:
+        return [cleaned_text]
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", " ", ""],
+    return _LARGE_DOCUMENT_SPLITTER.split_text(
+        cleaned_text
     )
-
-    return splitter.split_text(cleaned_text)
 
 def helper_extract_url_content_and_ingest(
     sources: list[dict],
@@ -533,7 +624,7 @@ def helper_extract_url_content_and_ingest(
             )
 
             if not extraction_results:
-                print(
+                logger.error(
                     f"No content extracted from source: {url}"
                 )
                 continue
@@ -544,7 +635,7 @@ def helper_extract_url_content_and_ingest(
             )
 
             if not raw_text:
-                print(
+                logger.error(
                     f"Extracted content was empty: {url}"
                 )
                 continue
@@ -554,25 +645,25 @@ def helper_extract_url_content_and_ingest(
             )
 
             if not cleaned_text:
-                print(
+                logger.error(
                     f"No usable content after cleaning: {url}"
                 )
                 continue
 
-            print(
+            logger.info(
                 f"Content cleaning for {url}: "
                 f"{len(raw_text)} → "
                 f"{len(cleaned_text)} characters"
             )
 
-            generated_chunks = create_semantic_regulatory_chunks(
+            generated_chunks = create_regulatory_chunks(
                 cleaned_text=cleaned_text,
                 country=country,
                 role=role,
                 regulation_topics=regulation_topics,
             )
 
-            print(
+            logger.info(
                 f"Semantic chunking for {url}: "
                 f"{len(generated_chunks)} chunks created"
             )
@@ -581,26 +672,43 @@ def helper_extract_url_content_and_ingest(
                 generated_chunks
             )
 
-            print(
+            logger.info(
                 f"Duplicate removal for {url}: "
                 f"{len(generated_chunks)} → "
                 f"{len(unique_chunks)} chunks"
             )
 
-            validated_chunks = validate_chunks(
+            bm25_query = build_bm25_query(
+                country=country,
+                role=role,
+                regulation_topics=regulation_topics,
+                why_this_applies=why_this_applies,
+            )
+            
+            filtered_chunks = filter_chunks_with_bm25(
                 chunks=unique_chunks,
+                query=bm25_query,
+                top_k=20
+            )
+            logger.info(
+                f"BM25 filtering: "
+                f"{len(unique_chunks)} → "
+                f"{len(filtered_chunks)} chunks"
+            )
+            validated_chunks = validate_chunks(
+                chunks=filtered_chunks,
                 min_characters=200,
                 max_characters=4000,
             )
 
-            print(
+            logger.info(
                 f"Chunk validation for {url}: "
                 f"{len(unique_chunks)} → "
                 f"{len(validated_chunks)} chunks"
             )
 
             if not validated_chunks:
-                print(
+                logger.error(
                     f"No valid chunks available for ingestion: {url}"
                 )
                 continue
@@ -666,30 +774,29 @@ def helper_extract_url_content_and_ingest(
                 namespace=namespace,
             )
 
-            print(
+            logger.info(
                 f"Ingested {len(rag_nodes)} chunks "
                 f"for {country} / {role} from {url}"
             )
 
         except Exception as exc:
-            print(
+            logger.error(
                 f"Error processing URL {url}: {exc}"
             )
             continue
 
-def create_semantic_regulatory_chunks(
+def create_regulatory_chunks(
     cleaned_text: str,
     country: str,
     role: str,
     regulation_topics: list[str],
 ) -> list[dict]:
+
     if not cleaned_text:
         return []
 
     document_sections = split_large_document(
-        cleaned_text=cleaned_text,
-        chunk_size=50_000,
-        chunk_overlap=1_000,
+        cleaned_text
     )
 
     topic_text = ", ".join(regulation_topics)
@@ -706,27 +813,25 @@ def create_semantic_regulatory_chunks(
         document_sections,
         start=1,
     ):
-        semantic_documents = _SEMANTIC_CHUNKER.create_documents(
-            [section_text]
+
+        retrieval_chunks = (
+            _REGULATORY_CHUNK_SPLITTER.split_text(
+                section_text
+            )
         )
 
-        for semantic_index, document in enumerate(
-            semantic_documents,
+        for chunk_index, chunk in enumerate(
+            retrieval_chunks,
             start=1,
         ):
-            chunk_content = document.page_content.strip()
-
-            if not chunk_content:
-                continue
 
             generated_chunks.append(
                 {
                     "chunk_text": (
-                        f"{context_header}\n\n"
-                        f"{chunk_content}"
+                        f"{context_header}\n\n{chunk}"
                     ),
                     "source_section": section_number,
-                    "semantic_chunk_index": semantic_index,
+                    "chunk_index": chunk_index,
                 }
             )
 
@@ -739,7 +844,7 @@ from collections.abc import Mapping
 def helper_get_route_check_status(
     decision: RouteComplianceDecision,
 ) -> str:
-    print(f"Evaluating route check status for decision: {decision}")
+    logger.info(f"Evaluating route check status for decision: {decision}")
     if isinstance(decision, Mapping):
         human_review = decision.get("human_intervention_required", False)
         status = decision.get("compliance_status")
@@ -770,3 +875,5 @@ def helper_delete_namespace_pinecone(namespace: str | None = None):
     """
 
     delete_shipment_namespace(namespace=namespace)
+
+

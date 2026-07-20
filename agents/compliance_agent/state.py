@@ -1,6 +1,5 @@
 from enum import Enum
 from typing import Annotated, TypedDict, Dict, Any, List, Optional
-# from agents.compliance_agent.schemas import RouteComplianceDecision
 
 def merge_route_compliance_results(
     left: dict[str, Any] | None,
@@ -56,7 +55,6 @@ class RouteComplianceWorkerState(TypedDict):
     human_intervention_required: bool
  
     # LLM Decision
-    # route_decision: Optional[RouteComplianceDecision]
     route_decision: Optional[Dict[str, Any]]
 
 

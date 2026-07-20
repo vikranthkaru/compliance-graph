@@ -1,7 +1,7 @@
+import logging
 from langgraph.types import Send
-
 from agents.compliance_agent.state import ComplianceState
-
+logger = logging.getLogger(__name__)
 
 def route_validation_edge(state: ComplianceState) -> str:
     if state.get("errors"):
@@ -23,11 +23,6 @@ def route_splitter(state: ComplianceState):
     regulation_requirements = state["regulation_search_plan"][
         "regulation_requirements"
     ]
-
-    print(
-        f"Route splitter started for "
-        f"{len(regulation_requirements)} routes"
-    )
 
     def normalize(value: str | None) -> str:
         return (value or "").strip().lower()
@@ -84,4 +79,8 @@ def route_splitter(state: ComplianceState):
                 },
             )
         )
+    logger.info(
+        "Created %d parallel compliance workers",
+        len(sends),
+    )
     return sends

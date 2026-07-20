@@ -1,6 +1,5 @@
 from uuid import uuid4
 from typing import Any
-from langgraph import graph
 from langgraph.types import Command
 
 from agents.compliance_agent.graph import build_compliance_graph
@@ -12,6 +11,14 @@ from services.salesforce_service import (
     save_route_check,
 )
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 def handle_new_compliance_event(
     event_payload: dict,
@@ -19,6 +26,10 @@ def handle_new_compliance_event(
     """
     Starts a brand new compliance workflow.
     """
+    logger.info(
+        "Starting compliance workflow for shipment %s",
+        event_payload.get("ShipmentId__c", "Unknown"),
+    )
 
     shipment_result = handle_shipment_event(event_payload)
 
@@ -47,12 +58,8 @@ def handle_new_compliance_event(
         config=config,
     )
 
-    snapshot = graph.get_state(config)
-
-    print("Thread ID:", thread_id)
-    print("Next nodes:", snapshot.next)
-    print("Checkpoint config:", snapshot.config)
-    print("Interrupts:", result.get("__interrupt__", []))
+    logger.info("Thread ID: %s", thread_id)
+    logger.info("Interrupts: %s", result.get("__interrupt__", []))
 
     process_interrupts(
         result=result,
@@ -194,7 +201,12 @@ def process_interrupts(
 
         interrupt_payload = current_interrupt.value
         decision = interrupt_payload["current_decision"]
-
+        logger.info(
+            "Saving interrupt %s for %s/%s",
+            current_interrupt.id,
+            interrupt_payload["country"],
+            interrupt_payload["route_type"],
+        )
         update_response = save_route_check(
             {
                 "identifier": "ROUTE_COMPLIANCE",

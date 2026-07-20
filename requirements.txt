@@ -38,3 +38,4 @@ requests
 langchain_experimental
 llama-index-embeddings-dashscope
 langgraph-checkpoint-mongodb
+rank-bm25
